@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
 use std::process::Command;
 
 use crate::github::{client::GithubClient, labels, repo};
@@ -129,6 +128,80 @@ fn check_file_exists(client: &GithubClient, owner: &str, repo: &str, path: &str)
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
+}
+
+/// Sync labels idempotently - create missing, update existing
+pub fn sync_labels(
+    client: &GithubClient,
+    owner: &str,
+    repo_name: &str,
+    dry_run: bool,
+) -> Result<SyncResult> {
+    let current = labels::list_labels(client, owner, repo_name)?;
+    let standard = labels::standard_labels();
+
+    let mut created = 0;
+    let mut updated = 0;
+    let mut up_to_date = 0;
+
+    for std_label in standard {
+        if let Some(existing) = current.iter().find(|l| l.name == std_label.name) {
+            // Check if needs update
+            if existing.color != std_label.color || existing.description != std_label.description {
+                if !dry_run {
+                    labels::update_label(client, owner, repo_name, &std_label.name, &std_label)?;
+                }
+                updated += 1;
+            } else {
+                up_to_date += 1;
+            }
+        } else {
+            // Create new label
+            if !dry_run {
+                labels::create_label(client, owner, repo_name, &std_label)?;
+            }
+            created += 1;
+        }
+    }
+
+    Ok(SyncResult {
+        created,
+        updated,
+        up_to_date,
+    })
+}
+
+/// Merge topics - add template topics without removing existing
+pub fn merge_topics(
+    client: &GithubClient,
+    owner: &str,
+    repo_name: &str,
+    template_topics: &[&str],
+    dry_run: bool,
+) -> Result<bool> {
+    let repo_obj = repo::get_repo(client, owner, repo_name)?;
+    let mut current_topics = repo_obj.topics.unwrap_or_default();
+
+    let mut changed = false;
+    for topic in template_topics {
+        if !current_topics.contains(&topic.to_string()) {
+            current_topics.push(topic.to_string());
+            changed = true;
+        }
+    }
+
+    if changed && !dry_run {
+        repo::set_topics(client, owner, repo_name, &current_topics)?;
+    }
+
+    Ok(changed)
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncResult {
+    pub created: usize,
+    pub updated: usize,
+    pub up_to_date: usize,
 }
 
 #[cfg(test)]

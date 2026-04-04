@@ -71,3 +71,15 @@ pub fn get_gitignore_template(client: &GithubClient, name: &str) -> Result<Strin
 pub fn get_repo(client: &GithubClient, owner: &str, name: &str) -> Result<Repo> {
     client.get(&format!("/repos/{owner}/{name}"))
 }
+
+pub fn set_topics(client: &GithubClient, owner: &str, name: &str, topics: &[String]) -> Result<()> {
+    #[derive(Serialize)]
+    struct TopicsBody {
+        names: Vec<String>,
+    }
+    let body = TopicsBody {
+        names: topics.to_vec(),
+    };
+    let _: serde_json::Value = client.put(&format!("/repos/{owner}/{name}/topics"), &body)?;
+    Ok(())
+}
