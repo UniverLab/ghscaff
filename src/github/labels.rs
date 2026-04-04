@@ -95,3 +95,79 @@ pub fn standard_labels() -> Vec<Label> {
         },
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_standard_labels_count() {
+        let labels = standard_labels();
+        assert_eq!(labels.len(), 12, "Should have exactly 12 standard labels");
+    }
+
+    #[test]
+    fn test_standard_labels_have_unique_names() {
+        let labels = standard_labels();
+        let mut names: Vec<_> = labels.iter().map(|l| &l.name).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            labels.len(),
+            "All label names should be unique"
+        );
+    }
+
+    #[test]
+    fn test_standard_labels_have_valid_colors() {
+        let labels = standard_labels();
+        for label in labels {
+            assert_eq!(
+                label.color.len(),
+                6,
+                "Color {} should be 6 hex characters",
+                label.color
+            );
+            assert!(
+                label.color.chars().all(|c| c.is_ascii_hexdigit()),
+                "Color {} should contain only hex digits",
+                label.color
+            );
+        }
+    }
+
+    #[test]
+    fn test_standard_labels_have_descriptions() {
+        let labels = standard_labels();
+        for label in labels {
+            assert!(
+                !label.description.is_empty(),
+                "Label {} should have a description",
+                label.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_bug_label_exists() {
+        let labels = standard_labels();
+        let bug = labels.iter().find(|l| l.name == "bug");
+        assert!(bug.is_some(), "Bug label should exist");
+        assert_eq!(bug.unwrap().color, "d73a4a");
+    }
+
+    #[test]
+    fn test_label_serialization() {
+        let label = Label {
+            name: "test".into(),
+            color: "000000".into(),
+            description: "Test label".into(),
+        };
+        let json = serde_json::to_string(&label).unwrap();
+        let deserialized: Label = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, label.name);
+        assert_eq!(deserialized.color, label.color);
+        assert_eq!(deserialized.description, label.description);
+    }
+}

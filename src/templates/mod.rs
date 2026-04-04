@@ -152,3 +152,38 @@ pub fn resolve(language: &str) -> Result<Box<dyn LanguageTemplate>> {
         other => anyhow::bail!("Unknown language: {other}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_available_languages() {
+        assert!(AVAILABLE.len() > 0, "Should have at least one language");
+        assert!(AVAILABLE.contains(&"rust"));
+    }
+
+    #[test]
+    fn test_resolve_rust_template() {
+        let tmpl = resolve("rust");
+        assert!(tmpl.is_ok(), "Should successfully resolve rust template");
+    }
+
+    #[test]
+    fn test_resolve_unknown_language() {
+        let result = resolve("python");
+        assert!(result.is_err(), "Should fail for unknown language");
+    }
+
+    #[test]
+    fn test_repo_file_struct() {
+        let file = RepoFile {
+            path: "test.rs".into(),
+            content: "fn main() {}".into(),
+            commit_message: "chore: init".into(),
+        };
+        assert_eq!(file.path, "test.rs");
+        assert_eq!(file.content, "fn main() {}");
+        assert_eq!(file.commit_message, "chore: init");
+    }
+}
