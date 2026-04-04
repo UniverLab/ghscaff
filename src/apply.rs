@@ -364,4 +364,29 @@ mod tests {
         let result = parse_github_remote(remote);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_parse_owner_repo_valid() {
+        let (owner, repo) = parse_owner_repo("myowner/myrepo").unwrap();
+        assert_eq!(owner, "myowner");
+        assert_eq!(repo, "myrepo");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_invalid() {
+        let result = parse_owner_repo("invalid-format");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sync_result_struct() {
+        let result = SyncResult {
+            created: 2,
+            updated: 1,
+            up_to_date: 9,
+        };
+        assert_eq!(result.created, 2);
+        assert_eq!(result.updated, 1);
+        assert_eq!(result.up_to_date, 9);
+    }
 }
