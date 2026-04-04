@@ -19,6 +19,7 @@ pub struct Repo {
     pub full_name: String,
     pub html_url: String,
     pub default_branch: String,
+    pub topics: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -65,4 +66,8 @@ pub fn get_gitignore_template(client: &GithubClient, name: &str) -> Result<Strin
     }
     let t: Template = client.get(&format!("/gitignore/templates/{name}"))?;
     Ok(t.source)
+}
+
+pub fn get_repo(client: &GithubClient, owner: &str, name: &str) -> Result<Repo> {
+    client.get(&format!("/repos/{owner}/{name}"))
 }

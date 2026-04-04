@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::client::GithubClient;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Label {
     pub name: String,
     pub color: String,

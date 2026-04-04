@@ -1,0 +1,176 @@
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::process::Command;
+
+use crate::github::{client::GithubClient, labels, repo};
+
+#[derive(Debug, Clone)]
+pub struct ApplyContext {
+    pub owner: String,
+    pub repo: String,
+    pub current_labels: Vec<labels::Label>,
+    pub has_develop: bool,
+    pub branch_protection_enabled: bool,
+    pub has_ci_workflow: bool,
+    pub current_topics: Vec<String>,
+}
+
+/// Auto-detect owner/repo from git remote origin
+/// Handles both HTTPS (https://github.com/owner/repo.git) and SSH (git@github.com:owner/repo.git)
+pub fn auto_detect_repo() -> Result<(String, String)> {
+    let output = Command::new("git")
+        .arg("remote")
+        .arg("get-url")
+        .arg("origin")
+        .output()
+        .context("Failed to execute git command. Are you in a git repository?")?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to get git remote. Make sure you're in a git repository with an 'origin' remote.");
+    }
+
+    let remote = String::from_utf8(output.stdout)
+        .context("Invalid UTF-8 in git remote URL")?
+        .trim()
+        .to_string();
+
+    parse_github_remote(&remote)
+}
+
+fn parse_github_remote(remote: &str) -> Result<(String, String)> {
+    // Handle HTTPS: https://github.com/owner/repo.git
+    if remote.starts_with("https://") {
+        let trimmed = remote
+            .strip_prefix("https://github.com/")
+            .context("HTTPS remote must be from github.com")?
+            .strip_suffix(".git")
+            .unwrap_or(remote.strip_prefix("https://github.com/").unwrap());
+
+        let parts: Vec<&str> = trimmed.split('/').collect();
+        if parts.len() >= 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+
+    // Handle SSH: git@github.com:owner/repo.git
+    if remote.starts_with("git@github.com:") {
+        let trimmed = remote
+            .strip_prefix("git@github.com:")
+            .unwrap()
+            .strip_suffix(".git")
+            .unwrap_or(remote.strip_prefix("git@github.com:").unwrap());
+
+        let parts: Vec<&str> = trimmed.split('/').collect();
+        if parts.len() >= 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+
+    anyhow::bail!(
+        "Could not parse GitHub remote: {}. Expected format: https://github.com/owner/repo.git or git@github.com:owner/repo.git",
+        remote
+    )
+}
+
+/// Fetch current state of the repository
+pub fn get_repo_state(client: &GithubClient, owner: &str, repo_name: &str) -> Result<ApplyContext> {
+    // Get current labels
+    let current_labels = labels::list_labels(client, owner, repo_name)?;
+
+    // Check for develop branch
+    let has_develop = check_branch_exists(client, owner, repo_name, "develop")?;
+
+    // Check branch protection status
+    let branch_protection_enabled = check_branch_protection(client, owner, repo_name, "main")?;
+
+    // Check if CI workflow exists
+    let has_ci_workflow = check_file_exists(client, owner, repo_name, ".github/workflows/ci.yml")?;
+
+    // Get current topics
+    let gh_repo = repo::get_repo(client, owner, repo_name)?;
+    let current_topics = gh_repo.topics.unwrap_or_default();
+
+    Ok(ApplyContext {
+        owner: owner.to_string(),
+        repo: repo_name.to_string(),
+        current_labels,
+        has_develop,
+        branch_protection_enabled,
+        has_ci_workflow,
+        current_topics,
+    })
+}
+
+fn check_branch_exists(client: &GithubClient, owner: &str, repo: &str, branch: &str) -> Result<bool> {
+    let path = format!("/repos/{owner}/{repo}/git/ref/heads/{branch}");
+    match client.get::<serde_json::Value>(&path) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+fn check_branch_protection(
+    client: &GithubClient,
+    owner: &str,
+    repo: &str,
+    branch: &str,
+) -> Result<bool> {
+    let path = format!("/repos/{owner}/{repo}/branches/{branch}/protection");
+    match client.get::<serde_json::Value>(&path) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+fn check_file_exists(client: &GithubClient, owner: &str, repo: &str, path: &str) -> Result<bool> {
+    let encoded_path = urlencoding::encode(path);
+    let api_path = format!("/repos/{owner}/{repo}/contents/{encoded_path}");
+    match client.get::<serde_json::Value>(&api_path) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_https_remote() {
+        let remote = "https://github.com/owner/repo.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_parse_https_remote_no_git_suffix() {
+        let remote = "https://github.com/owner/repo";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_parse_ssh_remote() {
+        let remote = "git@github.com:owner/repo.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_parse_ssh_remote_no_git_suffix() {
+        let remote = "git@github.com:owner/repo";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_parse_invalid_remote() {
+        let remote = "https://gitlab.com/owner/repo.git";
+        let result = parse_github_remote(remote);
+        assert!(result.is_err());
+    }
+}

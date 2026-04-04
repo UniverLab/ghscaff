@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod apply;
 mod github;
 mod templates;
 mod wizard;
