@@ -41,9 +41,6 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         None | Some(Command::New { .. }) => wizard::run(cli.dry_run),
-        Some(Command::Apply { repo, dry_run }) => {
-            let _ = (repo, dry_run);
-            anyhow::bail!("apply mode not yet implemented")
-        }
+        Some(Command::Apply { repo, dry_run }) => apply::run_apply(repo.as_deref(), dry_run),
     }
 }

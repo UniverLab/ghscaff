@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::github::{client::GithubClient, labels, repo};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ApplyContext {
     pub owner: String,
@@ -202,6 +203,123 @@ pub struct SyncResult {
     pub created: usize,
     pub updated: usize,
     pub up_to_date: usize,
+}
+
+/// Main apply mode orchestrator
+pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
+    // Get token
+    let token = crate::github::client::token_from_env()?;
+    let client = crate::github::client::GithubClient::new(&token);
+
+    // Determine repo
+    let (owner, repo_name) = if let Some(repo) = repo_arg {
+        parse_owner_repo(repo)?
+    } else {
+        auto_detect_repo()?
+    };
+
+    println!("  Checking existing repo... {}/{}", owner, repo_name);
+    let ctx = get_repo_state(&client, &owner, &repo_name)?;
+
+    // Display summary
+    println!();
+    println!("  Summary of changes:");
+    println!("  ◆ Labels: checking...");
+    let label_result = sync_labels(&client, &owner, &repo_name, true)?; // dry check
+    if label_result.created > 0 || label_result.updated > 0 {
+        println!(
+            "    • {} to create, {} to update, {} up to date",
+            label_result.created, label_result.updated, label_result.up_to_date
+        );
+    } else {
+        println!("    • all up to date");
+    }
+
+    println!("  ◆ Branch protection (main): {}", {
+        if ctx.branch_protection_enabled {
+            "enabled"
+        } else {
+            "would apply"
+        }
+    });
+
+    println!("  ◆ develop branch: {}", {
+        if ctx.has_develop {
+            "exists"
+        } else {
+            "would create"
+        }
+    });
+
+    println!("  ◆ CI workflow: {}", {
+        if ctx.has_ci_workflow {
+            "exists"
+        } else {
+            "would create"
+        }
+    });
+
+    if dry_run {
+        println!();
+        println!("  [dry-run] No changes applied.");
+        return Ok(());
+    }
+
+    println!();
+    let confirmed = inquire::Confirm::new("Apply these changes?")
+        .with_default(true)
+        .prompt()?;
+
+    if !confirmed {
+        println!("  Aborted.");
+        return Ok(());
+    }
+
+    // Apply all changes
+    println!();
+    println!("  Applying changes...");
+
+    // 1. Labels
+    sync_labels(&client, &owner, &repo_name, false)?;
+    println!("  ✓ Labels synced");
+
+    // 2. Branch protection
+    crate::github::branches::apply_branch_protection(&client, &owner, &repo_name, "main", "CI")?;
+    println!("  ✓ Branch protection applied");
+
+    // 3. Develop branch (if needed)
+    if !ctx.has_develop {
+        create_develop_branch(&client, &owner, &repo_name)?;
+        println!("  ✓ develop branch created");
+    }
+
+    // 4. Merge topics
+    if merge_topics(&client, &owner, &repo_name, &["github", "scaffold"], false)? {
+        println!("  ✓ Topics updated");
+    }
+
+    println!();
+    println!("  Done!");
+    Ok(())
+}
+
+fn parse_owner_repo(input: &str) -> Result<(String, String)> {
+    let parts: Vec<&str> = input.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid repo format. Use: owner/repo");
+    }
+    Ok((parts[0].to_string(), parts[1].to_string()))
+}
+
+fn create_develop_branch(
+    client: &GithubClient,
+    owner: &str,
+    repo_name: &str,
+) -> Result<()> {
+    use crate::github::branches;
+    let main_sha = branches::get_branch_sha(client, owner, repo_name, "main")?;
+    branches::create_branch(client, owner, repo_name, "develop", &main_sha)?;
+    Ok(())
 }
 
 #[cfg(test)]
