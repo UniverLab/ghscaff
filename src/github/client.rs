@@ -19,7 +19,7 @@ impl GithubClient {
         let url = format!("https://api.github.com{path}");
         self.client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", format!("token {}", self.token))
             .header("User-Agent", "ghscaff")
             .header("Accept", "application/vnd.github+json")
             .send()
@@ -38,7 +38,7 @@ impl GithubClient {
         let url = format!("https://api.github.com{path}");
         self.client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", format!("token {}", self.token))
             .header("User-Agent", "ghscaff")
             .header("Accept", "application/vnd.github+json")
             .json(body)
@@ -54,7 +54,7 @@ impl GithubClient {
         let url = format!("https://api.github.com{path}");
         self.client
             .put(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", format!("token {}", self.token))
             .header("User-Agent", "ghscaff")
             .header("Accept", "application/vnd.github+json")
             .json(body)
@@ -74,7 +74,7 @@ impl GithubClient {
         let url = format!("https://api.github.com{path}");
         self.client
             .patch(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", format!("token {}", self.token))
             .header("User-Agent", "ghscaff")
             .header("Accept", "application/vnd.github+json")
             .json(body)
