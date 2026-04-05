@@ -50,7 +50,7 @@ pub fn create_repo(
         name,
         description,
         private,
-        auto_init: false,
+        auto_init: true, // creates an initial commit so Contents API works immediately
     };
     if is_org {
         client.post(&format!("/orgs/{owner}/repos"), &body)

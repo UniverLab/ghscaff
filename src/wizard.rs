@@ -33,7 +33,6 @@ pub struct WizardConfig {
     pub language: String,
     pub default_branch: String,
     pub create_develop: bool,
-    pub branch_protection: bool,
     pub license: Option<String>,
     pub create_ci: bool,
     pub create_labels: bool,
@@ -117,9 +116,6 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
     let create_develop = Confirm::new("Create develop branch?")
         .with_default(true)
         .prompt()?;
-    let branch_protection = Confirm::new("Enable branch protection on main?")
-        .with_default(true)
-        .prompt()?;
 
     // Step 5 — Features
     let feature_items = vec![
@@ -155,7 +151,6 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         language,
         default_branch,
         create_develop,
-        branch_protection,
         license,
         create_ci: features.contains(&"GitHub Actions CI workflow"),
         create_labels: features.contains(&"Standard label set (12 labels)"),
@@ -209,8 +204,6 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
             c.is_org,
         )?;
         println!("ok  ({})", r.html_url);
-        // brief pause so GitHub fully initializes the repository before writing files
-        std::thread::sleep(std::time::Duration::from_millis(800));
         Some(r)
     };
 
@@ -294,18 +287,16 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
-    // 7. Branch protection — main (and develop if created)
-    if c.branch_protection {
-        step!(&format!("apply branch protection ({})", c.default_branch), {
-            branches::apply_branch_protection(client, owner, name, &c.default_branch, "build")?;
+    // 7. Branch protection — always applied to main (and develop if created)
+    step!(&format!("apply branch protection ({})", c.default_branch), {
+        branches::apply_branch_protection(client, owner, name, &c.default_branch, "build")?;
+        Ok::<(), anyhow::Error>(())
+    });
+    if c.create_develop {
+        step!("apply branch protection (develop)", {
+            branches::apply_branch_protection(client, owner, name, "develop", "build")?;
             Ok::<(), anyhow::Error>(())
         });
-        if c.create_develop {
-            step!("apply branch protection (develop)", {
-                branches::apply_branch_protection(client, owner, name, "develop", "build")?;
-                Ok::<(), anyhow::Error>(())
-            });
-        }
     }
 
     // 8. Labels
@@ -348,14 +339,10 @@ fn count_steps(c: &WizardConfig, tmpl: &dyn templates::LanguageTemplate) -> usiz
         n += 1;
     }
     if c.create_develop {
-        n += 1;
+        n += 1; // create develop
+        n += 1; // protect develop
     }
-    if c.branch_protection {
-        n += 1; // main protection
-        if c.create_develop {
-            n += 1; // develop protection
-        }
-    }
+    n += 1; // protect main (always)
     if c.create_labels {
         n += 1;
     }
