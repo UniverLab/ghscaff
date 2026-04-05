@@ -118,7 +118,7 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         "LICENSE",
         "README.md",
         "GitHub Actions CI workflow",
-        "Standard label set (12 labels)",
+        "Standard labels",
     ];
     let feature_defaults = vec![0usize, 1, 2, 3];
     let features = MultiSelect::new("Features:", feature_items.clone())
@@ -149,7 +149,7 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         create_develop,
         license,
         create_ci: features.contains(&"GitHub Actions CI workflow"),
-        create_labels: features.contains(&"Standard label set (12 labels)"),
+        create_labels: features.contains(&"Standard labels"),
     })
 }
 
@@ -300,16 +300,13 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         step!("sync labels", {
             let existing = labels::list_labels(client, owner, name)?;
             let standard = labels::standard_labels();
-            let mut created = 0u32;
             for label in &standard {
                 if existing.iter().any(|e| e.name == label.name) {
                     labels::update_label(client, owner, name, &label.name, label)?;
                 } else {
                     labels::create_label(client, owner, name, label)?;
-                    created += 1;
                 }
             }
-            println!("ok  ({created} created)");
             Ok::<(), anyhow::Error>(())
         });
     }
