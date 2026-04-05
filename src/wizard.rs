@@ -294,12 +294,18 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
-    // 7. Branch protection
+    // 7. Branch protection — main (and develop if created)
     if c.branch_protection {
-        step!("apply branch protection", {
+        step!(&format!("apply branch protection ({})", c.default_branch), {
             branches::apply_branch_protection(client, owner, name, &c.default_branch, "build")?;
             Ok::<(), anyhow::Error>(())
         });
+        if c.create_develop {
+            step!("apply branch protection (develop)", {
+                branches::apply_branch_protection(client, owner, name, "develop", "build")?;
+                Ok::<(), anyhow::Error>(())
+            });
+        }
     }
 
     // 8. Labels
@@ -345,7 +351,10 @@ fn count_steps(c: &WizardConfig, tmpl: &dyn templates::LanguageTemplate) -> usiz
         n += 1;
     }
     if c.branch_protection {
-        n += 1;
+        n += 1; // main protection
+        if c.create_develop {
+            n += 1; // develop protection
+        }
     }
     if c.create_labels {
         n += 1;
