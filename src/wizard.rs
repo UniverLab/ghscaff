@@ -85,7 +85,7 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
     let visibility = Select::new("Visibility:", vec!["Public", "Private"]).prompt()?;
     let private = visibility == "Private";
 
-    let mut owner_options = vec![format!("{username} (personal)")];
+    let mut owner_options = vec![username.to_string()];
     let orgs = repo::list_orgs(client).unwrap_or_else(|_| {
         eprintln!("  ⚠  Could not list orgs (token may need 'read:org' scope)");
         vec![]
@@ -95,10 +95,10 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
     }
 
     let owner_selection = Select::new("Owner:", owner_options).prompt()?;
-    let (owner, is_org) = if owner_selection.ends_with("(personal)") {
-        (username.to_string(), false)
+    let (owner, is_org) = if owner_selection == username {
+        (owner_selection, false)
     } else {
-        (owner_selection.clone(), true)
+        (owner_selection, true)
     };
 
     // Step 3 — Language
@@ -314,6 +314,14 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
+    // 9. Topics
+    if !c.topics.is_empty() {
+        step!("set topics", {
+            repo::set_topics(client, owner, name, &c.topics)?;
+            Ok::<(), anyhow::Error>(())
+        });
+    }
+
     println!();
     if let Some(r) = created_repo {
         println!("  Done  —  {}", r.html_url);
@@ -340,6 +348,9 @@ fn count_steps(c: &WizardConfig, tmpl: &dyn templates::LanguageTemplate) -> usiz
     }
     n += 1; // protect main (always)
     if c.create_labels {
+        n += 1;
+    }
+    if !c.topics.is_empty() {
         n += 1;
     }
     n

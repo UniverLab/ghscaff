@@ -39,7 +39,7 @@ pub fn standard_labels() -> Vec<Label> {
             description: "Something isn't working".into(),
         },
         Label {
-            name: "enhancement".into(),
+            name: "feature".into(),
             color: "a2eeef".into(),
             description: "New feature or request".into(),
         },
@@ -63,36 +63,6 @@ pub fn standard_labels() -> Vec<Label> {
             color: "008672".into(),
             description: "Extra attention needed".into(),
         },
-        Label {
-            name: "wontfix".into(),
-            color: "ffffff".into(),
-            description: "This will not be worked on".into(),
-        },
-        Label {
-            name: "duplicate".into(),
-            color: "cfd3d7".into(),
-            description: "This issue already exists".into(),
-        },
-        Label {
-            name: "question".into(),
-            color: "d876e3".into(),
-            description: "Further information requested".into(),
-        },
-        Label {
-            name: "dependencies".into(),
-            color: "0366d6".into(),
-            description: "Dependency updates".into(),
-        },
-        Label {
-            name: "ci/cd".into(),
-            color: "f9d0c4".into(),
-            description: "CI/CD related changes".into(),
-        },
-        Label {
-            name: "refactor".into(),
-            color: "e99695".into(),
-            description: "Code refactor, no behavior change".into(),
-        },
     ]
 }
 
@@ -103,7 +73,7 @@ mod tests {
     #[test]
     fn test_standard_labels_count() {
         let labels = standard_labels();
-        assert_eq!(labels.len(), 12, "Should have exactly 12 standard labels");
+        assert_eq!(labels.len(), 6, "Should have exactly 6 standard labels");
     }
 
     #[test]
