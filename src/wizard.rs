@@ -93,14 +93,10 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
     for org in &orgs {
         owner_options.push(org.login.clone());
     }
-    owner_options.push("Other (enter org name)...".to_string());
 
     let owner_selection = Select::new("Owner:", owner_options).prompt()?;
     let (owner, is_org) = if owner_selection.ends_with("(personal)") {
         (username.to_string(), false)
-    } else if owner_selection == "Other (enter org name)..." {
-        let org_name = Text::new("Organization name:").prompt()?;
-        (org_name, true)
     } else {
         (owner_selection.clone(), true)
     };

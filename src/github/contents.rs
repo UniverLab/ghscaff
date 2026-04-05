@@ -61,14 +61,15 @@ pub fn create_file(
         match client.put::<Body, Response>(&endpoint, &body) {
             Ok(resp) => return Ok(resp.commit.sha),
             Err(e) => {
-                let msg = e.to_string();
+                // {:#} renders the full anyhow chain so we can detect the status code
+                let full_msg = format!("{e:#}");
                 // Only retry on 404; other errors (403, 422…) fail immediately.
-                if !msg.contains("404") {
+                if !full_msg.contains("404") {
                     bail!(
                         "Failed to create file '{path}'.\n\
                          Hint: if using a fine-grained PAT ensure 'Contents: Read and write' is granted.\n\
                          For org repos the token must also be authorised for the organisation.\n\
-                         Cause: {e}"
+                         Cause: {full_msg}"
                     );
                 }
                 if attempt + 1 < DELAYS_MS.len() {
