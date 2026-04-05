@@ -1,17 +1,23 @@
+#[cfg(test)]
 use super::{LanguageTemplate, RepoFile};
 
+#[cfg(test)]
 pub struct RustTemplate;
 
-impl LanguageTemplate for RustTemplate {
-    fn name(&self) -> &'static str {
+#[cfg(test)]
+impl RustTemplate {
+    pub fn name(&self) -> &'static str {
         "rust"
     }
+}
 
-    fn gitignore_name(&self) -> &'static str {
-        "Rust"
+#[cfg(test)]
+impl LanguageTemplate for RustTemplate {
+    fn gitignore_name(&self) -> String {
+        "Rust".into()
     }
 
-    fn ci_workflow(&self) -> &'static str {
+    fn ci_workflow(&self, _name: &str, _description: &str, _owner: &str) -> String {
         r#"name: CI
 on:
   pull_request:
@@ -26,9 +32,10 @@ jobs:
       - run: cargo clippy -- -D warnings
       - run: cargo test
 "#
+        .into()
     }
 
-    fn boilerplate_files(&self, repo_name: &str, description: &str) -> Vec<RepoFile> {
+    fn boilerplate_files(&self, repo_name: &str, description: &str, _owner: &str) -> Vec<RepoFile> {
         let cargo_toml = format!(
             "[package]\nname = \"{repo_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\ndescription = \"{description}\"\n\n[[bin]]\nname = \"{repo_name}\"\npath = \"src/main.rs\"\n\n[dependencies]\n"
         );
@@ -49,13 +56,13 @@ jobs:
             RepoFile {
                 path: "README.md".into(),
                 content: readme,
-                commit_message: "docs: init README".into(),
+                commit_message: "docs: init README.md".into(),
             },
         ]
     }
 
-    fn default_topics(&self) -> Vec<&'static str> {
-        vec!["rust", "cli"]
+    fn default_topics(&self) -> Vec<String> {
+        vec!["rust".into(), "cli".into()]
     }
 }
 
@@ -78,11 +85,8 @@ mod tests {
     #[test]
     fn test_rust_template_ci_workflow_has_correct_name() {
         let tmpl = RustTemplate;
-        let workflow = tmpl.ci_workflow();
-        assert!(
-            workflow.contains("name: CI"),
-            "Workflow should have name: CI"
-        );
+        let workflow = tmpl.ci_workflow("my-app", "", "myorg");
+        assert!(workflow.contains("name: CI"), "Workflow should have name: CI");
         assert!(
             workflow.contains("branches: [main, develop]"),
             "Workflow should trigger on main and develop"
@@ -92,7 +96,7 @@ mod tests {
     #[test]
     fn test_rust_template_ci_workflow_has_required_steps() {
         let tmpl = RustTemplate;
-        let workflow = tmpl.ci_workflow();
+        let workflow = tmpl.ci_workflow("my-app", "", "myorg");
         assert!(workflow.contains("cargo fmt --check"));
         assert!(workflow.contains("cargo clippy -- -D warnings"));
         assert!(workflow.contains("cargo test"));
@@ -101,7 +105,7 @@ mod tests {
     #[test]
     fn test_rust_template_boilerplate_files() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
         assert_eq!(files.len(), 3, "Should generate 3 files");
 
         let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
@@ -113,7 +117,7 @@ mod tests {
     #[test]
     fn test_rust_template_cargo_toml_has_name_placeholder() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
         let cargo_toml = files.iter().find(|f| f.path == "Cargo.toml").unwrap();
         assert!(cargo_toml.content.contains("my-app"));
         assert!(cargo_toml.content.contains("A test app"));
@@ -122,7 +126,7 @@ mod tests {
     #[test]
     fn test_rust_template_main_rs_is_valid() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
         let main_rs = files.iter().find(|f| f.path == "src/main.rs").unwrap();
         assert!(main_rs.content.contains("fn main()"));
         assert!(main_rs.content.contains("println!"));
@@ -131,7 +135,7 @@ mod tests {
     #[test]
     fn test_rust_template_readme_has_name() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
         let readme = files.iter().find(|f| f.path == "README.md").unwrap();
         assert!(readme.content.contains("my-app"));
         assert!(readme.content.contains("A test app"));
@@ -142,14 +146,14 @@ mod tests {
         let tmpl = RustTemplate;
         let topics = tmpl.default_topics();
         assert_eq!(topics.len(), 2);
-        assert!(topics.contains(&"rust"));
-        assert!(topics.contains(&"cli"));
+        assert!(topics.contains(&"rust".to_string()));
+        assert!(topics.contains(&"cli".to_string()));
     }
 
     #[test]
     fn test_rust_template_file_commit_messages() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("test", "description");
+        let files = tmpl.boilerplate_files("test", "description", "myorg");
         for file in files {
             assert!(
                 !file.commit_message.is_empty(),

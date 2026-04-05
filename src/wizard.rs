@@ -64,7 +64,7 @@ pub fn run(dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    execute(&client, &config, dry_run)
+    execute(&client, &config, dry_run, &token)
 }
 
 fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig> {
@@ -162,11 +162,13 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
     })
 }
 
-fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool) -> Result<()> {
+fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) -> Result<()> {
     println!();
 
-    let tmpl = templates::resolve(&c.language)?;
-    let total = count_steps(c);
+    print!("  Fetching boilerplate template... ");
+    let tmpl = templates::resolve(&c.language, token)?;
+    println!("ok");
+    let total = count_steps(c, tmpl.as_ref());
     let mut step = 0usize;
 
     macro_rules! step {
@@ -216,7 +218,7 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool) -> Result<()>
     let name = &c.name;
 
     // 2. Commit initial files
-    let files = tmpl.boilerplate_files(name, &c.description);
+    let files = tmpl.boilerplate_files(name, &c.description, owner);
     let mut last_sha = String::new();
 
     for file in &files {
@@ -236,7 +238,7 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool) -> Result<()>
 
     // 3. .gitignore
     step!("commit .gitignore", {
-        let content = repo::get_gitignore_template(client, tmpl.gitignore_name())?;
+        let content = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
         contents::create_file(
             client,
             owner,
@@ -266,12 +268,13 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool) -> Result<()>
     // 5. CI workflow
     if c.create_ci {
         step!("commit CI workflow", {
+            let workflow = tmpl.ci_workflow(name, &c.description, owner);
             contents::create_file(
                 client,
                 owner,
                 name,
                 ".github/workflows/ci.yml",
-                tmpl.ci_workflow(),
+                &workflow,
                 "ci: add GitHub Actions workflow",
             )?;
             Ok::<(), anyhow::Error>(())
@@ -328,10 +331,9 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool) -> Result<()>
     Ok(())
 }
 
-fn count_steps(c: &WizardConfig) -> usize {
-    let tmpl = templates::resolve(&c.language).unwrap();
+fn count_steps(c: &WizardConfig, tmpl: &dyn templates::LanguageTemplate) -> usize {
     let mut n = 1; // create repo
-    n += tmpl.boilerplate_files(&c.name, &c.description).len(); // files
+    n += tmpl.boilerplate_files(&c.name, &c.description, &c.owner).len();
     n += 1; // .gitignore
     if c.license.is_some() {
         n += 1;
