@@ -24,7 +24,7 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 - **🪄 Interactive wizard** — Create GitHub repos with a conversational guided flow
 - **⚡ Zero dependencies** — Single binary, no runtime requirements
 - **🔄 Idempotent apply mode** — Configure existing repos without recreation
-- **🏷️ Smart labels** — Auto-create 12 standard issue labels
+- **🏷️ Smart labels** — Auto-create 6 core issue labels
 - **🛡️ Branch protection** — Enforce reviews, status checks, and workflow validation
 - **🚀 Language templates** — Rust (v1), Python/Node.js/Java coming soon
 - **📝 Boilerplate files** — README, Cargo.toml, CI/CD workflows, LICENSE
@@ -141,14 +141,14 @@ The wizard guides you through **7 interactive steps**:
 
   Apply these changes? (Y/n) y
 
-  [1/8] create repo jheisonmb/my-rust-cli... ok  (https://github.com/jheisonmb/my-rust-cli)
-  [2/8] commit Cargo.toml... ok
-  [3/8] commit src/main.rs... ok
-  [4/8] commit README.md... ok
-  [5/8] commit .gitignore... ok
-  [6/8] commit CI workflow... ok
-  [7/8] create develop branch... ok
-  [8/8] sync labels... ok  (12 created)
+  [1/14] create repo jheisonmb/my-rust-cli... ok  (https://github.com/jheisonmb/my-rust-cli)
+  [2/14] commit Cargo.toml... ok
+  [3/14] commit src/main.rs... ok
+  [4/14] commit README.md... ok
+  [5/14] commit .gitignore... ok
+  [6/14] commit CI workflow... ok
+  [7/14] create develop branch... ok
+  [8/14] sync labels... ok  (12 created)
 
   Done  —  https://github.com/jheisonmb/my-rust-cli
 ```
@@ -237,22 +237,16 @@ Includes:
 
 ## Standard Label Set
 
-12 labels are auto-created with every new repo:
+6 core labels are auto-created with every new repo:
 
 | Label | Color | Description |
 |-------|-------|-------------|
 | `bug` | `#d73a4a` | Something isn't working |
-| `enhancement` | `#a2eeef` | New feature or request |
+| `feature` | `#a2eeef` | New feature or request |
 | `documentation` | `#0075ca` | Improvements to docs |
 | `breaking-change` | `#e4e669` | Introduces breaking changes |
 | `good first issue` | `#7057ff` | Good for newcomers |
 | `help wanted` | `#008672` | Extra attention needed |
-| `wontfix` | `#ffffff` | This will not be worked on |
-| `duplicate` | `#cfd3d7` | This issue already exists |
-| `question` | `#d876e3` | Further information requested |
-| `dependencies` | `#0366d6` | Dependency updates |
-| `ci/cd` | `#f9d0c4` | CI/CD related changes |
-| `refactor` | `#e99695` | Code refactor, no behavior change |
 
 ---
 
@@ -307,7 +301,7 @@ cargo fmt
 - [ ] `apply` mode for existing repos
 - [x] `--dry-run` in both modes
 - [x] Rust language template
-- [x] Standard labels (12)
+- [x] Standard labels (6 core labels)
 - [x] Branch protection
 - [ ] Publish to crates.io
 
