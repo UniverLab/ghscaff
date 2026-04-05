@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::client::GithubClient;
@@ -43,25 +43,48 @@ pub fn create_file(
     let encoded = base64::engine::general_purpose::STANDARD.encode(content);
     let endpoint = format!("/repos/{owner}/{repo}/contents/{path}");
 
-    // If a file already exists (e.g. README.md from auto_init), its SHA is required
-    // for the update. Fetch it before writing.
-    let existing_sha = get_file_sha(client, owner, repo, path);
+    // GitHub's Contents API can return 404 briefly after repo creation due to
+    // eventual consistency (even with auto_init: true). Retry with backoff.
+    const DELAYS_MS: &[u64] = &[1500, 3000, 5000];
 
-    let body = Body {
-        message,
-        content: &encoded,
-        sha: existing_sha,
-    };
+    let mut last_err = None;
+    for (attempt, &delay_ms) in DELAYS_MS.iter().enumerate() {
+        // Fetch SHA on every attempt so we always have the latest value.
+        let existing_sha = get_file_sha(client, owner, repo, path);
 
-    let resp: Response = client
-        .put(&endpoint, &body)
-        .with_context(|| {
-            format!(
-                "Failed to create file '{path}'.\n\
-                 Hint: if using a fine-grained PAT ensure 'Contents: Read and write' is granted.\n\
-                 For org repos the token must also be authorised for the organisation."
-            )
-        })?;
+        let body = Body {
+            message,
+            content: &encoded,
+            sha: existing_sha,
+        };
 
-    Ok(resp.commit.sha)
+        match client.put::<Body, Response>(&endpoint, &body) {
+            Ok(resp) => return Ok(resp.commit.sha),
+            Err(e) => {
+                let msg = e.to_string();
+                // Only retry on 404; other errors (403, 422…) fail immediately.
+                if !msg.contains("404") {
+                    bail!(
+                        "Failed to create file '{path}'.\n\
+                         Hint: if using a fine-grained PAT ensure 'Contents: Read and write' is granted.\n\
+                         For org repos the token must also be authorised for the organisation.\n\
+                         Cause: {e}"
+                    );
+                }
+                if attempt + 1 < DELAYS_MS.len() {
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                }
+                last_err = Some(e);
+            }
+        }
+    }
+
+    Err(last_err.unwrap()).with_context(|| {
+        format!(
+            "Failed to create file '{path}' after {} attempts.\n\
+             Hint: if using a fine-grained PAT ensure 'Contents: Read and write' is granted.\n\
+             For org repos the token must also be authorised for the organisation.",
+            DELAYS_MS.len()
+        )
+    })
 }
