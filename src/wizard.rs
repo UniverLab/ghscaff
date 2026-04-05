@@ -35,7 +35,6 @@ pub struct WizardConfig {
     pub create_develop: bool,
     pub branch_protection: bool,
     pub license: Option<String>,
-    pub create_readme: bool,
     pub create_ci: bool,
     pub create_labels: bool,
 }
@@ -54,7 +53,6 @@ pub fn run(dry_run: bool) -> Result<()> {
     println!();
 
     let config = collect_config(&client, &user.login)?;
-    print_summary(&config);
 
     println!();
     let confirmed = Confirm::new("Apply these changes?")
@@ -71,11 +69,11 @@ pub fn run(dry_run: bool) -> Result<()> {
 
 fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig> {
     // Step 1 — Repository basics
-    let name = Text::new("Repository name").prompt()?;
-    let description = Text::new("Description").with_default("").prompt()?;
-    let topics_raw = Text::new("Topics (comma-separated)")
+    let name = Text::new("Repository name:").prompt()?;
+    let description = Text::new("Description:").with_default("").prompt()?;
+    let topics_raw = Text::new("Topics:")
         .with_default("")
-        .with_help_message("e.g. rust,cli,tool")
+        .with_help_message("comma-separated, e.g. rust,cli,tool")
         .prompt()?;
     let topics: Vec<String> = topics_raw
         .split(',')
@@ -85,29 +83,37 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         .collect();
 
     // Step 2 — Visibility & ownership
-    let visibility = Select::new("Visibility", vec!["Private", "Public"]).prompt()?;
+    let visibility = Select::new("Visibility:", vec!["Public", "Private"]).prompt()?;
     let private = visibility == "Private";
 
     let mut owner_options = vec![format!("{username} (personal)")];
-    let orgs = repo::list_orgs(client).unwrap_or_default();
+    let orgs = repo::list_orgs(client).unwrap_or_else(|_| {
+        eprintln!("  ⚠  Could not list orgs (token may need 'read:org' scope)");
+        vec![]
+    });
     for org in &orgs {
         owner_options.push(org.login.clone());
     }
-    let owner_selection = Select::new("Owner", owner_options).prompt()?;
+    owner_options.push("Other (enter org name)...".to_string());
+
+    let owner_selection = Select::new("Owner:", owner_options).prompt()?;
     let (owner, is_org) = if owner_selection.ends_with("(personal)") {
         (username.to_string(), false)
+    } else if owner_selection == "Other (enter org name)..." {
+        let org_name = Text::new("Organization name:").prompt()?;
+        (org_name, true)
     } else {
         (owner_selection.clone(), true)
     };
 
     // Step 3 — Language
-    let language = Select::new("Language / template", templates::AVAILABLE.to_vec())
+    let language = Select::new("Language:", templates::AVAILABLE.to_vec())
         .with_help_message("Drives .gitignore, CI workflow, and boilerplate")
         .prompt()?
         .to_string();
 
     // Step 4 — Branches
-    let default_branch = Text::new("Default branch").with_default("main").prompt()?;
+    let default_branch = Text::new("Default branch:").with_default("main").prompt()?;
     let create_develop = Confirm::new("Create develop branch?")
         .with_default(true)
         .prompt()?;
@@ -123,13 +129,13 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         "Standard label set (12 labels)",
     ];
     let feature_defaults = vec![0usize, 1, 2, 3];
-    let features = MultiSelect::new("Features", feature_items.clone())
+    let features = MultiSelect::new("Features:", feature_items.clone())
         .with_default(&feature_defaults)
         .with_help_message("space select  enter confirm")
         .prompt()?;
 
     let license = if features.contains(&"LICENSE") {
-        let lic = Select::new("License", vec!["MIT", "Apache-2.0", "GPL-3.0", "None"]).prompt()?;
+        let lic = Select::new("License:", vec!["MIT", "Apache-2.0", "GPL-3.0", "None"]).prompt()?;
         if lic == "None" {
             None
         } else {
@@ -151,46 +157,9 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         create_develop,
         branch_protection,
         license,
-        create_readme: features.contains(&"README.md"),
         create_ci: features.contains(&"GitHub Actions CI workflow"),
         create_labels: features.contains(&"Standard label set (12 labels)"),
     })
-}
-
-fn print_summary(c: &WizardConfig) {
-    println!("\n  Summary:");
-    println!("  ◆ {}/{}", c.owner, c.name);
-    if !c.description.is_empty() {
-        println!("  ◆ description: {}", c.description);
-    }
-    println!(
-        "  ◆ visibility: {}",
-        if c.private { "private" } else { "public" }
-    );
-    println!("  ◆ language: {}", c.language);
-    println!("  ◆ default branch: {}", c.default_branch);
-    if c.create_develop {
-        println!("  ◆ develop branch: yes");
-    }
-    if c.branch_protection {
-        println!("  ◆ branch protection: yes");
-    }
-    if let Some(lic) = &c.license {
-        println!("  ◆ license: {lic}");
-    }
-    let mut features = vec![];
-    if c.create_readme {
-        features.push("README");
-    }
-    if c.create_ci {
-        features.push("CI workflow");
-    }
-    if c.create_labels {
-        features.push("labels");
-    }
-    if !features.is_empty() {
-        println!("  ◆ features: {}", features.join(", "));
-    }
 }
 
 fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool) -> Result<()> {
@@ -238,6 +207,8 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool) -> Result<()>
             c.is_org,
         )?;
         println!("ok  ({})", r.html_url);
+        // brief pause so GitHub fully initializes the repository before writing files
+        std::thread::sleep(std::time::Duration::from_millis(800));
         Some(r)
     };
 

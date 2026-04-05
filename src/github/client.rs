@@ -90,6 +90,6 @@ impl GithubClient {
 /// Read GITHUB_TOKEN from env. Fail fast with a clear message.
 pub fn token_from_env() -> Result<String> {
     std::env::var("GITHUB_TOKEN").context(
-        "GITHUB_TOKEN not set. Export your token:\n  export GITHUB_TOKEN=ghp_xxxxxxxxxxxx\nRequired scopes: repo, workflow"
+        "GITHUB_TOKEN not set. Export your token:\n  export GITHUB_TOKEN=ghp_xxxxxxxxxxxx\n\nRequired scopes (classic PAT):  repo, workflow\nRequired permissions (fine-grained PAT): Contents=write, Workflows=write, Administration=write, Metadata=read"
     )
 }

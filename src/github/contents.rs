@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::client::GithubClient;
@@ -33,6 +33,6 @@ pub fn create_file(
             message,
             content: &encoded,
         },
-    )?;
+    ).with_context(|| format!("Failed to create file '{path}'. If using a fine-grained PAT, ensure 'Contents: Read and write' permission is granted."))?;
     Ok(resp.commit.sha)
 }
