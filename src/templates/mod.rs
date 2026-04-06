@@ -1,28 +1,261 @@
 pub mod rust;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+
+const BOILERPLATE_REPO: &str = "UniverLab/ghscaff-boilerplate";
+
+// Files excluded from boilerplate_files() — handled separately or metadata
+const SKIP_FILES: &[&str] = &[
+    "template.toml",
+    "secrets.toml",
+    "PLACEHOLDERS.md",
+    ".gitignore", // replaced by GitHub's official gitignore template via API
+];
+
+pub trait LanguageTemplate {
+    fn gitignore_name(&self) -> String;
+    fn boilerplate_files(&self, name: &str, description: &str, owner: &str) -> Vec<RepoFile>;
+    #[allow(dead_code)]
+    fn default_topics(&self) -> Vec<String>;
+}
 
 pub struct RepoFile {
     pub path: String,
     pub content: String,
-    pub commit_message: String,
 }
 
-pub trait LanguageTemplate {
-    #[allow(dead_code)]
-    fn name(&self) -> &'static str;
-    fn gitignore_name(&self) -> &'static str;
-    fn ci_workflow(&self) -> &'static str;
-    fn boilerplate_files(&self, repo_name: &str, description: &str) -> Vec<RepoFile>;
-    #[allow(dead_code)]
-    fn default_topics(&self) -> Vec<&'static str>;
+struct RemoteTemplate {
+    cache_dir: PathBuf,
 }
 
-pub fn resolve(language: &str) -> Result<Box<dyn LanguageTemplate>> {
-    match language {
-        "rust" => Ok(Box::new(rust::RustTemplate)),
-        other => anyhow::bail!("Unknown language template: {other}"),
+impl RemoteTemplate {
+    fn apply_placeholders(
+        &self,
+        content: &str,
+        name: &str,
+        description: &str,
+        owner: &str,
+    ) -> String {
+        content
+            .replace("{{name}}", name)
+            .replace("{{description}}", description)
+            .replace("{{github_org}}", owner)
+            .replace("{{github_repo}}", name)
+    }
+
+    fn gitignore_from_toml(&self) -> String {
+        let content =
+            std::fs::read_to_string(self.cache_dir.join("template.toml")).unwrap_or_default();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("template = ") {
+                if let Some(val) = trimmed.split('"').nth(1) {
+                    return val.to_string();
+                }
+            }
+        }
+        String::new()
     }
 }
 
+impl LanguageTemplate for RemoteTemplate {
+    fn gitignore_name(&self) -> String {
+        self.gitignore_from_toml()
+    }
+
+    fn boilerplate_files(&self, name: &str, description: &str, owner: &str) -> Vec<RepoFile> {
+        let mut files = vec![];
+        for entry in walkdir::WalkDir::new(&self.cache_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+        {
+            let path = entry.path();
+            let Ok(rel_path) = path.strip_prefix(&self.cache_dir) else {
+                continue;
+            };
+            let rel = rel_path.to_string_lossy().replace('\\', "/");
+            if SKIP_FILES.iter().any(|s| rel == *s) {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let content = self.apply_placeholders(&raw, name, description, owner);
+            files.push(RepoFile { path: rel, content });
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        files
+    }
+
+    fn default_topics(&self) -> Vec<String> {
+        vec![]
+    }
+}
+
+/// Download the template from `BOILERPLATE_REPO` and cache locally.
+/// Requires an authenticated token to avoid rate limits.
+/// When `force_refresh` is true, the cache is deleted and re-downloaded.
+pub fn resolve(
+    language: &str,
+    token: &str,
+    force_refresh: bool,
+) -> Result<Box<dyn LanguageTemplate>> {
+    if !AVAILABLE.contains(&language) {
+        anyhow::bail!(
+            "Unknown language: {language}. Available: {}",
+            AVAILABLE.join(", ")
+        );
+    }
+    let cache = cache_dir()?.join(language);
+    if force_refresh && cache.exists() {
+        std::fs::remove_dir_all(&cache)?;
+    }
+    if !cache.exists() {
+        download(language, token)?;
+    }
+    if !cache.exists() {
+        anyhow::bail!("Template '{language}' could not be fetched from {BOILERPLATE_REPO}");
+    }
+    Ok(Box::new(RemoteTemplate { cache_dir: cache }))
+}
+
+fn download(language: &str, token: &str) -> Result<()> {
+    let url = format!("https://api.github.com/repos/{BOILERPLATE_REPO}/tarball/main");
+    let bytes = reqwest::blocking::Client::new()
+        .get(&url)
+        .header("Authorization", format!("token {token}"))
+        .header("User-Agent", "ghscaff")
+        .send()
+        .context("Failed to download boilerplate")?
+        .bytes()
+        .context("Failed to read boilerplate response")?;
+
+    let gz = flate2::read::GzDecoder::new(bytes.as_ref());
+    let mut archive = tar::Archive::new(gz);
+    let dest = cache_dir()?.join(language);
+    std::fs::create_dir_all(&dest)?;
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.to_path_buf();
+        // Strip the top-level tarball directory (e.g. UniverLab-ghscaff-boilerplate-abc123/)
+        let stripped: PathBuf = path.components().skip(1).collect();
+        if stripped.starts_with(language) {
+            let rel: PathBuf = stripped.components().skip(1).collect();
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
+            let target = dest.join(&rel);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            entry.unpack(&target)?;
+        }
+    }
+    Ok(())
+}
+
+fn cache_dir() -> Result<PathBuf> {
+    let base = dirs::home_dir().context("Cannot resolve home directory")?;
+    Ok(base.join(".ghscaff").join("boilerplate"))
+}
+
+#[allow(dead_code)]
+pub fn apply_placeholders(dir: &Path, name: &str, description: &str, author: &str) -> Result<()> {
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let replaced = content
+            .replace("{{name}}", name)
+            .replace("{{description}}", description)
+            .replace("{{author}}", author);
+        if replaced != content {
+            std::fs::write(path, replaced)?;
+        }
+    }
+    Ok(())
+}
+
 pub const AVAILABLE: &[&str] = &["rust"];
+
+/// A secret required by a template (declared in secrets.toml).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecretSpec {
+    pub name: String,
+    pub description: String,
+    #[serde(default = "default_true")]
+    #[allow(dead_code)]
+    pub required: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct SecretsFile {
+    #[serde(default)]
+    secrets: Vec<SecretSpec>,
+}
+
+/// Load secrets declared by the cached template, if any.
+/// Returns an empty vec if no secrets.toml exists or it cannot be parsed.
+pub fn load_secrets(language: &str) -> Vec<SecretSpec> {
+    let path = cache_dir()
+        .ok()
+        .map(|d| d.join(language).join("secrets.toml"));
+    let Some(path) = path.filter(|p| p.exists()) else {
+        return vec![];
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return vec![];
+    };
+    toml::from_str::<SecretsFile>(&content)
+        .map(|f| f.secrets)
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::templates::rust::RustTemplate;
+    #[test]
+    fn test_available_languages() {
+        assert!(!AVAILABLE.is_empty(), "Should have at least one language");
+        assert!(AVAILABLE.contains(&"rust"));
+    }
+
+    #[test]
+    fn test_resolve_rust_template_embedded() {
+        let tmpl = RustTemplate;
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_unknown_language() {
+        let result = resolve("python", "dummy", false);
+        assert!(result.is_err(), "Should fail for unknown language");
+    }
+
+    #[test]
+    fn test_repo_file_struct() {
+        let file = RepoFile {
+            path: "test.rs".into(),
+            content: "fn main() {}".into(),
+        };
+        assert_eq!(file.path, "test.rs");
+        assert_eq!(file.content, "fn main() {}");
+    }
+}

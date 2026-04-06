@@ -19,7 +19,7 @@ impl GithubClient {
         let url = format!("https://api.github.com{path}");
         self.client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", format!("token {}", self.token))
             .header("User-Agent", "ghscaff")
             .header("Accept", "application/vnd.github+json")
             .send()
@@ -38,7 +38,7 @@ impl GithubClient {
         let url = format!("https://api.github.com{path}");
         self.client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", format!("token {}", self.token))
             .header("User-Agent", "ghscaff")
             .header("Accept", "application/vnd.github+json")
             .json(body)
@@ -54,7 +54,7 @@ impl GithubClient {
         let url = format!("https://api.github.com{path}");
         self.client
             .put(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", format!("token {}", self.token))
             .header("User-Agent", "ghscaff")
             .header("Accept", "application/vnd.github+json")
             .json(body)
@@ -66,6 +66,21 @@ impl GithubClient {
             .context("Failed to parse response")
     }
 
+    pub fn put_no_response<B: serde::Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        let url = format!("https://api.github.com{path}");
+        self.client
+            .put(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .header("User-Agent", "ghscaff")
+            .header("Accept", "application/vnd.github+json")
+            .json(body)
+            .send()
+            .context("HTTP PUT failed")?
+            .error_for_status()
+            .context("GitHub API error")?;
+        Ok(())
+    }
+
     pub fn patch<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
@@ -74,7 +89,7 @@ impl GithubClient {
         let url = format!("https://api.github.com{path}");
         self.client
             .patch(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", format!("token {}", self.token))
             .header("User-Agent", "ghscaff")
             .header("Accept", "application/vnd.github+json")
             .json(body)
@@ -90,6 +105,6 @@ impl GithubClient {
 /// Read GITHUB_TOKEN from env. Fail fast with a clear message.
 pub fn token_from_env() -> Result<String> {
     std::env::var("GITHUB_TOKEN").context(
-        "GITHUB_TOKEN not set. Export your token:\n  export GITHUB_TOKEN=ghp_xxxxxxxxxxxx\nRequired scopes: repo, workflow"
+        "GITHUB_TOKEN not set. Export your token:\n  export GITHUB_TOKEN=ghp_xxxxxxxxxxxx\n\nRequired scopes (classic PAT):  repo, workflow\nRequired permissions (fine-grained PAT): Contents=write, Workflows=write, Administration=write, Metadata=read"
     )
 }

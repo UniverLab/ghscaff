@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::client::GithubClient;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Label {
     pub name: String,
     pub color: String,
@@ -39,7 +39,7 @@ pub fn standard_labels() -> Vec<Label> {
             description: "Something isn't working".into(),
         },
         Label {
-            name: "enhancement".into(),
+            name: "feature".into(),
             color: "a2eeef".into(),
             description: "New feature or request".into(),
         },
@@ -63,35 +63,81 @@ pub fn standard_labels() -> Vec<Label> {
             color: "008672".into(),
             description: "Extra attention needed".into(),
         },
-        Label {
-            name: "wontfix".into(),
-            color: "ffffff".into(),
-            description: "This will not be worked on".into(),
-        },
-        Label {
-            name: "duplicate".into(),
-            color: "cfd3d7".into(),
-            description: "This issue already exists".into(),
-        },
-        Label {
-            name: "question".into(),
-            color: "d876e3".into(),
-            description: "Further information requested".into(),
-        },
-        Label {
-            name: "dependencies".into(),
-            color: "0366d6".into(),
-            description: "Dependency updates".into(),
-        },
-        Label {
-            name: "ci/cd".into(),
-            color: "f9d0c4".into(),
-            description: "CI/CD related changes".into(),
-        },
-        Label {
-            name: "refactor".into(),
-            color: "e99695".into(),
-            description: "Code refactor, no behavior change".into(),
-        },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_standard_labels_count() {
+        let labels = standard_labels();
+        assert_eq!(labels.len(), 6, "Should have exactly 6 standard labels");
+    }
+
+    #[test]
+    fn test_standard_labels_have_unique_names() {
+        let labels = standard_labels();
+        let mut names: Vec<_> = labels.iter().map(|l| &l.name).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            labels.len(),
+            "All label names should be unique"
+        );
+    }
+
+    #[test]
+    fn test_standard_labels_have_valid_colors() {
+        let labels = standard_labels();
+        for label in labels {
+            assert_eq!(
+                label.color.len(),
+                6,
+                "Color {} should be 6 hex characters",
+                label.color
+            );
+            assert!(
+                label.color.chars().all(|c| c.is_ascii_hexdigit()),
+                "Color {} should contain only hex digits",
+                label.color
+            );
+        }
+    }
+
+    #[test]
+    fn test_standard_labels_have_descriptions() {
+        let labels = standard_labels();
+        for label in labels {
+            assert!(
+                !label.description.is_empty(),
+                "Label {} should have a description",
+                label.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_bug_label_exists() {
+        let labels = standard_labels();
+        let bug = labels.iter().find(|l| l.name == "bug");
+        assert!(bug.is_some(), "Bug label should exist");
+        assert_eq!(bug.unwrap().color, "d73a4a");
+    }
+
+    #[test]
+    fn test_label_serialization() {
+        let label = Label {
+            name: "test".into(),
+            color: "000000".into(),
+            description: "Test label".into(),
+        };
+        let json = serde_json::to_string(&label).unwrap();
+        let deserialized: Label = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, label.name);
+        assert_eq!(deserialized.color, label.color);
+        assert_eq!(deserialized.description, label.description);
+    }
 }
