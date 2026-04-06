@@ -115,44 +115,50 @@ ghscaff --dry-run
 
 ## Wizard Flow
 
-The wizard guides you through **7 interactive steps**:
+The wizard guides you through **6 interactive steps**:
 
 1. **Repository basics** — Name, description, topics
 2. **Visibility & ownership** — Public/Private, personal or org
 3. **Language / template** — Choose boilerplate (Rust, Python, etc.)
-4. **Branches** — Default branch, develop branch, branch protection
-5. **Features** — LICENSE, README, CI workflow, labels
+4. **Branches** — Default branch, develop branch
+5. **Features** — LICENSE, standard labels
 6. **Review & confirm** — Verify all settings before creation
-7. **Execution** — Live progress with step indicators
+
+Then **automatically**:
+- Creates the repository
+- Commits all boilerplate files in a single atomic commit (`chore: init repository`)
+- Applies branch protection to main (and develop if created)
+- Syncs labels, topics, and CI/CD workflows
+- Configures required GitHub Actions secrets from `secrets.toml`
 
 ```
   Create a new GitHub repository
 
-  Validating token... ok  (jheisonmb)
+  Validating token... ok  (JheisonMB)
 
-  Summary:
-  ◆ jheisonmb/my-rust-cli
-  ◆ description: A CLI tool built with Rust
-  ◆ visibility: private
-  ◆ language: Rust
-  ◆ default branch: main
-  ◆ develop branch: yes
-  ◆ branch protection: yes
-  ◆ license: MIT
-  ◆ features: README, CI workflow, labels
+  > Repository name: my-rust-cli
+  > Description: A CLI tool built with Rust
+  > Topics: rust, cli, tool
+  > Visibility: Public
+  > Owner: UniverLab
+  > Language: rust
+  > Default branch: main
+  > Create develop branch? Yes
+  > Features: LICENSE, Standard labels
+  > License: MIT
 
-  Apply these changes? (Y/n) y
+  Apply these changes? Yes
 
-  [1/14] create repo jheisonmb/my-rust-cli... ok  (https://github.com/jheisonmb/my-rust-cli)
-  [2/14] commit Cargo.toml... ok
-  [3/14] commit src/main.rs... ok
-  [4/14] commit README.md... ok
-  [5/14] commit .gitignore... ok
-  [6/14] commit CI workflow... ok
-  [7/14] create develop branch... ok
-  [8/14] sync labels... ok  (12 created)
+  Fetching boilerplate template... ok
+  [1/7] create repo UniverLab/my-rust-cli... ok  (https://github.com/UniverLab/my-rust-cli)
+  [2/7] init repository... ok
+  [3/7] create develop branch... ok
+  [4/7] apply branch protection (main)... ok
+  [5/7] apply branch protection (develop)... ok
+  [6/7] sync labels... ok
+  [7/7] set topics... ok
 
-  Done  —  https://github.com/jheisonmb/my-rust-cli
+  Done  —  https://github.com/UniverLab/my-rust-cli
 ```
 
 ---
@@ -170,10 +176,12 @@ ghscaff apply
 ```
 
 Applies:
+- ✅ Atomic single commit with all boilerplate files (no individual file commits)
 - ✅ Labels (creates missing, updates existing)
-- ✅ Branch protection on `main`
+- ✅ Branch protection on `main` and `develop` (if created)
 - ✅ Topics (merges with existing)
-- ✅ CI workflow (creates if absent)
+- ✅ GitHub Actions secrets (from template's `secrets.toml`)
+- ✅ CI/CD workflows (included in boilerplate)
 - ✅ `develop` branch (creates if absent)
 
 Safe to run multiple times — idempotent operations only.
@@ -215,18 +223,27 @@ If the token is missing or invalid, ghscaff fails immediately with a clear error
 ## Boilerplate Templates
 
 Each language template includes:
-- **Cargo.toml** / **package.json** / etc. — dependency manifest
-- **src/main.rs** — entry point boilerplate
-- **README.md** — template with name and description
-- **.gitignore** — language-specific (via GitHub API)
-- **.github/workflows/ci.yml** — CI/CD workflow
+- **Dependency manifest** — Cargo.toml, package.json, etc.
+- **Entry point** — src/main.rs boilerplate
+- **README.md** — Template with placeholders for name and description
+- **.gitignore** — Language-specific (fetched from GitHub API)
+- **.github/workflows/ci.yml** — CI/CD workflow with basic checks
+- **.github/workflows/release.yml** — Release workflow (published on Git tags)
+- **`CONTRIBUTING.md`** — Developer guide (includes secrets config for maintainers)
+- **LICENSE** — Placeholder (user selects license type during wizard)
+
+All files are merged into a single atomic `chore: init repository` commit.
 
 ### v1 — Rust
 
-Includes:
+CI workflow includes:
 - `cargo fmt --check` — code formatting
 - `cargo clippy -- -D warnings` — linting
 - `cargo test` — test suite
+
+Release workflow:
+- Builds and publishes to [crates.io](https://crates.io)
+- Requires `CARGO_REGISTRY_TOKEN` secret (configured during wizard)
 - Default topics: `rust`, `cli`
 
 ### v2+ Planned
@@ -298,25 +315,34 @@ cargo fmt
 
 ## Roadmap
 
-### v1 — Rust scaffold + apply mode ✓ IN PROGRESS
+### v1 — Rust scaffold + apply mode ✓ COMPLETE
 - [x] Full wizard flow (`new`)
-- [ ] `apply` mode for existing repos
+- [x] `apply` mode for existing repos
 - [x] `--dry-run` in both modes
 - [x] Rust language template
 - [x] Standard labels (6 core labels)
 - [x] Branch protection
+- [x] Single atomic commit (Git Trees API)
+- [x] Template secrets (GitHub Actions API)
+- [x] Self-update detection on startup
 - [ ] Publish to crates.io
 
 ### v2 — Multi-language
-- [ ] Python template
-- [ ] Node.js/TypeScript template
+- [ ] Python template (poetry/pip)
+- [ ] Node.js/TypeScript template (npm/yarn)
 - [ ] Java/Spring template
-- [ ] `CONTRIBUTING.md` template
-- [ ] Issue templates
+- [ ] `templates.toml` for per-template feature configuration
 
 ### v3 — Config & presets
 - [ ] `~/.config/ghscaff/presets.toml` — save wizard configs
 - [ ] `ghscaff --preset my-rust-lib` — skip wizard
+- [ ] `ghscaff clone --preset` — initialize from preset
+
+### v4 — Advanced
+- [ ] Issue templates (`ISSUE_TEMPLATE/`)
+- [ ] Pull request templates (`PULL_REQUEST_TEMPLATE/`)
+- [ ] Organization-level config
+- [ ] Monorepo scaffold support
 
 ---
 
@@ -335,6 +361,16 @@ All code must:
 - Pass `cargo clippy -- -D warnings`
 - Pass `cargo test`
 
+### Secrets Configuration
+
+If you're extending `ghscaff` with new templates or modifying the release workflow, you may need to set up GitHub Actions secrets for your development fork:
+
+- **`CARGO_REGISTRY_TOKEN`** — Required for publishing Rust crates to crates.io
+  - Get your token from [crates.io/me](https://crates.io/me)
+  - Add it as a repository secret in GitHub (`Settings > Secrets and variables > Actions`)
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) in each template's boilerplate for maintainer setup instructions.
+
 ---
 
 ## License
@@ -351,4 +387,4 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ---
 
-Made with ❤️ by [JheisonMB](https://github.com/JheisonMB)
+Made with ❤️ by [JheisonMB](https://github.com/JheisonMB) and [UniverLab](https://github.com/UniverLab)

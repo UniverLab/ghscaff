@@ -17,24 +17,6 @@ impl LanguageTemplate for RustTemplate {
         "Rust".into()
     }
 
-    fn ci_workflow(&self, _name: &str, _description: &str, _owner: &str) -> String {
-        r#"name: CI
-on:
-  pull_request:
-    branches: [main, develop]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo fmt --check
-      - run: cargo clippy -- -D warnings
-      - run: cargo test
-"#
-        .into()
-    }
-
     fn boilerplate_files(&self, repo_name: &str, description: &str, _owner: &str) -> Vec<RepoFile> {
         let cargo_toml = format!(
             "[package]\nname = \"{repo_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\ndescription = \"{description}\"\n\n[[bin]]\nname = \"{repo_name}\"\npath = \"src/main.rs\"\n\n[dependencies]\n"
@@ -43,21 +25,9 @@ jobs:
         let readme = format!("# {repo_name}\n\n{description}\n");
 
         vec![
-            RepoFile {
-                path: "Cargo.toml".into(),
-                content: cargo_toml,
-                commit_message: "chore: init Cargo.toml".into(),
-            },
-            RepoFile {
-                path: "src/main.rs".into(),
-                content: main_rs,
-                commit_message: "chore: init src/main.rs".into(),
-            },
-            RepoFile {
-                path: "README.md".into(),
-                content: readme,
-                commit_message: "docs: init README.md".into(),
-            },
+            RepoFile { path: "Cargo.toml".into(), content: cargo_toml },
+            RepoFile { path: "src/main.rs".into(), content: main_rs },
+            RepoFile { path: "README.md".into(), content: readme },
         ]
     }
 
@@ -80,26 +50,6 @@ mod tests {
     fn test_rust_template_gitignore_name() {
         let tmpl = RustTemplate;
         assert_eq!(tmpl.gitignore_name(), "Rust");
-    }
-
-    #[test]
-    fn test_rust_template_ci_workflow_has_correct_name() {
-        let tmpl = RustTemplate;
-        let workflow = tmpl.ci_workflow("my-app", "", "myorg");
-        assert!(workflow.contains("name: CI"), "Workflow should have name: CI");
-        assert!(
-            workflow.contains("branches: [main, develop]"),
-            "Workflow should trigger on main and develop"
-        );
-    }
-
-    #[test]
-    fn test_rust_template_ci_workflow_has_required_steps() {
-        let tmpl = RustTemplate;
-        let workflow = tmpl.ci_workflow("my-app", "", "myorg");
-        assert!(workflow.contains("cargo fmt --check"));
-        assert!(workflow.contains("cargo clippy -- -D warnings"));
-        assert!(workflow.contains("cargo test"));
     }
 
     #[test]
@@ -148,21 +98,5 @@ mod tests {
         assert_eq!(topics.len(), 2);
         assert!(topics.contains(&"rust".to_string()));
         assert!(topics.contains(&"cli".to_string()));
-    }
-
-    #[test]
-    fn test_rust_template_file_commit_messages() {
-        let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("test", "description", "myorg");
-        for file in files {
-            assert!(
-                !file.commit_message.is_empty(),
-                "Commit message should not be empty"
-            );
-            assert!(
-                file.commit_message.contains(':'),
-                "Commit message should follow conventional commits"
-            );
-        }
     }
 }

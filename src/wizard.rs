@@ -34,7 +34,6 @@ pub struct WizardConfig {
     pub default_branch: String,
     pub create_develop: bool,
     pub license: Option<String>,
-    pub create_ci: bool,
     pub create_labels: bool,
 }
 
@@ -114,13 +113,8 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         .prompt()?;
 
     // Step 5 — Features
-    let feature_items = vec![
-        "LICENSE",
-        "README.md",
-        "GitHub Actions CI workflow",
-        "Standard labels",
-    ];
-    let feature_defaults = vec![0usize, 1, 2, 3];
+    let feature_items = vec!["LICENSE", "Standard labels"];
+    let feature_defaults = vec![0usize, 1];
     let features = MultiSelect::new("Features:", feature_items.clone())
         .with_default(&feature_defaults)
         .with_help_message("space select  enter confirm")
@@ -148,7 +142,6 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         default_branch,
         create_develop,
         license,
-        create_ci: features.contains(&"GitHub Actions CI workflow"),
         create_labels: features.contains(&"Standard labels"),
     })
 }
@@ -156,11 +149,12 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
 fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) -> Result<()> {
     println!();
 
+    // Always download fresh template for `new` so cache is never stale
     print!("  Fetching boilerplate template... ");
-    let tmpl = templates::resolve(&c.language, token)?;
+    let tmpl = templates::resolve(&c.language, token, true)?;
     println!("ok");
     let secret_specs = templates::load_secrets(&c.language);
-    let total = count_steps(c, tmpl.as_ref(), &secret_specs);
+    let total = count_steps(c, &secret_specs);
     let mut step = 0usize;
 
     macro_rules! step {
@@ -176,7 +170,7 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         }};
     }
 
-    // 1. Create repo
+    // 1. Create repo (empty — initial commit via Trees API below)
     let created_repo = if dry_run {
         step += 1;
         println!(
@@ -207,84 +201,51 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
     let owner = &c.owner;
     let name = &c.name;
 
-    // 2. Commit initial files
-    let files = tmpl.boilerplate_files(name, &c.description, owner);
-    let mut last_sha = String::new();
+    // 2. Collect all boilerplate files for a single init commit
+    let mut init_files: Vec<contents::TreeFile> = vec![];
 
-    for file in &files {
-        step!(&format!("commit {}", file.path), {
-            let sha = contents::create_file(
-                client,
-                owner,
-                name,
-                &file.path,
-                &file.content,
-                &file.commit_message,
-            )?;
-            last_sha = sha;
-            Ok::<(), anyhow::Error>(())
-        });
+    // Template files (boilerplate — all files including ci.yml, release.yml, etc.)
+    for f in tmpl.boilerplate_files(name, &c.description, owner) {
+        init_files.push(contents::TreeFile { path: f.path, content: f.content });
     }
 
-    // 3. .gitignore
-    step!("commit .gitignore", {
-        let content = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
-        contents::create_file(
+    // .gitignore — fetched fresh from GitHub's gitignore API
+    let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
+    init_files.push(contents::TreeFile { path: ".gitignore".into(), content: gitignore });
+
+    // LICENSE (placeholder — user replaces it or CI generates it)
+    if let Some(lic) = &c.license {
+        let license_text = format!(
+            "# {} License\n\nSee https://opensource.org/licenses/{} for the full license text.\n",
+            lic, lic
+        );
+        init_files.push(contents::TreeFile { path: "LICENSE".into(), content: license_text });
+    }
+
+    // 3. Single init commit with all files
+    let mut init_sha = String::new();
+    step!("init repository", {
+        let sha = contents::create_tree_commit(
             client,
             owner,
             name,
-            ".gitignore",
-            &content,
-            "chore: add .gitignore",
+            &init_files,
+            "chore: init repository",
+            &c.default_branch,
         )?;
+        init_sha = sha;
         Ok::<(), anyhow::Error>(())
     });
 
-    // 4. LICENSE
-    if c.license.is_some() {
-        step!("commit LICENSE", {
-            contents::create_file(
-                client,
-                owner,
-                name,
-                "LICENSE",
-                "# License placeholder",
-                "chore: add LICENSE",
-            )?;
-            Ok::<(), anyhow::Error>(())
-        });
-    }
-
-    // 5. CI workflow
-    if c.create_ci {
-        step!("commit CI workflow", {
-            let workflow = tmpl.ci_workflow(name, &c.description, owner);
-            contents::create_file(
-                client,
-                owner,
-                name,
-                ".github/workflows/ci.yml",
-                &workflow,
-                "ci: add GitHub Actions workflow",
-            )?;
-            Ok::<(), anyhow::Error>(())
-        });
-    }
-
-    // 6. develop branch
+    // 4. develop branch
     if c.create_develop {
         step!("create develop branch", {
-            let sha = if last_sha.is_empty() {
-                branches::get_branch_sha(client, owner, name, &c.default_branch)?
-            } else {
-                last_sha.clone()
-            };
-            branches::create_branch(client, owner, name, "develop", &sha)?;
+            branches::create_branch(client, owner, name, "develop", &init_sha)?;
             Ok::<(), anyhow::Error>(())
         });
     }
 
-    // 7. Branch protection — always applied to main (and develop if created)
+    // 5. Branch protection — always applied to main (and develop if created)
     step!(&format!("apply branch protection ({})", c.default_branch), {
         branches::apply_branch_protection(client, owner, name, &c.default_branch, "build")?;
         Ok::<(), anyhow::Error>(())
@@ -296,7 +257,7 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
-    // 8. Labels
+    // 6. Labels
     if c.create_labels {
         step!("sync labels", {
             let existing = labels::list_labels(client, owner, name)?;
@@ -312,7 +273,7 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
-    // 9. Topics
+    // 7. Topics
     if !c.topics.is_empty() {
         step!("set topics", {
             repo::set_topics(client, owner, name, &c.topics)?;
@@ -320,7 +281,7 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
-    // 10. Secrets from template — read from env first, prompt if missing, warn if skipped
+    // 8. Secrets from template — read from env first, prompt if missing, warn if skipped
     for spec in &secret_specs {
         let value = if let Ok(env_val) = std::env::var(&spec.name) {
             println!("  ◆ Secret {}: using value from environment", spec.name);
@@ -346,7 +307,7 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
                 Ok::<(), anyhow::Error>(())
             });
         } else {
-            step += 1; // count the step even if skipped so total stays consistent
+            step += 1; // keep total consistent even when skipped
         }
     }
 
@@ -360,16 +321,9 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
     Ok(())
 }
 
-fn count_steps(c: &WizardConfig, tmpl: &dyn templates::LanguageTemplate, secrets: &[templates::SecretSpec]) -> usize {
+fn count_steps(c: &WizardConfig, secrets: &[templates::SecretSpec]) -> usize {
     let mut n = 1; // create repo
-    n += tmpl.boilerplate_files(&c.name, &c.description, &c.owner).len();
-    n += 1; // .gitignore
-    if c.license.is_some() {
-        n += 1;
-    }
-    if c.create_ci {
-        n += 1;
-    }
+    n += 1; // init commit (all boilerplate files in one shot)
     if c.create_develop {
         n += 1; // create develop
         n += 1; // protect develop

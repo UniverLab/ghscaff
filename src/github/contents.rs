@@ -1,91 +1,196 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::client::GithubClient;
 
-/// Returns the blob SHA of an existing file, or None if the file does not exist.
-fn get_file_sha(client: &GithubClient, owner: &str, repo: &str, path: &str) -> Option<String> {
-    #[derive(Deserialize)]
-    struct FileInfo {
-        sha: String,
-    }
-    client
-        .get::<FileInfo>(&format!("/repos/{owner}/{repo}/contents/{path}"))
-        .ok()
-        .map(|f| f.sha)
+pub struct TreeFile {
+    pub path: String,
+    pub content: String,
 }
 
-pub fn create_file(
+#[derive(Serialize)]
+struct BlobBody {
+    content: String,
+    encoding: String,
+}
+
+#[derive(Deserialize)]
+struct BlobResponse {
+    sha: String,
+}
+
+#[derive(Serialize)]
+struct TreeItemBody {
+    path: String,
+    mode: String,
+    #[serde(rename = "type")]
+    item_type: String,
+    sha: String,
+}
+
+#[derive(Serialize)]
+struct CreateTreeBody {
+    tree: Vec<TreeItemBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_tree: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TreeResponse {
+    sha: String,
+}
+
+#[derive(Deserialize)]
+struct CommitTreeInfo {
+    sha: String,
+}
+
+#[derive(Deserialize)]
+struct CommitInfo {
+    sha: String,
+    #[serde(default)]
+    tree: Option<CommitTreeInfo>,
+}
+
+#[derive(Serialize)]
+struct CreateCommitBody {
+    message: String,
+    tree: String,
+    parents: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CreateRefBody {
+    #[serde(rename = "ref")]
+    ref_name: String,
+    sha: String,
+}
+
+#[derive(Serialize)]
+struct UpdateRefBody {
+    sha: String,
+    force: bool,
+}
+
+fn get_branch_sha_opt(
     client: &GithubClient,
     owner: &str,
     repo: &str,
-    path: &str,
-    content: &str,
-    message: &str,
-) -> Result<String> {
-    #[derive(Serialize)]
-    struct Body<'a> {
-        message: &'a str,
-        content: &'a str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        sha: Option<String>,
+    branch: &str,
+) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Ref {
+        object: RefObject,
     }
     #[derive(Deserialize)]
-    struct Response {
-        commit: Commit,
-    }
-    #[derive(Deserialize)]
-    struct Commit {
+    struct RefObject {
         sha: String,
     }
+    let path = format!("/repos/{owner}/{repo}/git/refs/heads/{branch}");
+    client.get::<Ref>(&path).ok().map(|r| r.object.sha)
+}
 
-    use base64::Engine;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(content);
-    let endpoint = format!("/repos/{owner}/{repo}/contents/{path}");
-
-    // GitHub's Contents API can return 404 briefly after repo creation due to
-    // eventual consistency (even with auto_init: true). Retry with backoff.
-    const DELAYS_MS: &[u64] = &[1500, 3000, 5000];
-
-    let mut last_err = None;
-    for (attempt, &delay_ms) in DELAYS_MS.iter().enumerate() {
-        // Fetch SHA on every attempt so we always have the latest value.
-        let existing_sha = get_file_sha(client, owner, repo, path);
-
-        let body = Body {
-            message,
-            content: &encoded,
-            sha: existing_sha,
-        };
-
-        match client.put::<Body, Response>(&endpoint, &body) {
-            Ok(resp) => return Ok(resp.commit.sha),
-            Err(e) => {
-                // {:#} renders the full anyhow chain so we can detect the status code
-                let full_msg = format!("{e:#}");
-                // Only retry on 404; other errors (403, 422…) fail immediately.
-                if !full_msg.contains("404") {
-                    bail!(
-                        "Failed to create file '{path}'.\n\
-                         Hint: if using a fine-grained PAT ensure 'Contents: Read and write' is granted.\n\
-                         For org repos the token must also be authorised for the organisation.\n\
-                         Cause: {full_msg}"
-                    );
-                }
-                if attempt + 1 < DELAYS_MS.len() {
-                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                }
-                last_err = Some(e);
-            }
+/// Commit all `files` in a single git commit using the Trees API.
+/// Works on empty repos (creates the initial ref) and on existing branches.
+/// Returns the new commit SHA.
+pub fn create_tree_commit(
+    client: &GithubClient,
+    owner: &str,
+    repo: &str,
+    files: &[TreeFile],
+    message: &str,
+    branch: &str,
+) -> Result<String> {
+    // GitHub initializes the git database asynchronously after repo creation.
+    // Wait until the default branch ref is reachable before proceeding.
+    const READY_DELAYS_MS: &[u64] = &[1000, 2000, 3000, 5000, 8000];
+    for &delay_ms in READY_DELAYS_MS {
+        if get_branch_sha_opt(client, owner, repo, branch).is_some() {
+            break;
         }
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
     }
 
-    Err(last_err.unwrap()).with_context(|| {
-        format!(
-            "Failed to create file '{path}' after {} attempts.\n\
-             Hint: if using a fine-grained PAT ensure 'Contents: Read and write' is granted.\n\
-             For org repos the token must also be authorised for the organisation.",
-            DELAYS_MS.len()
+    // 1. Create a blob for each file
+    let mut tree_items: Vec<TreeItemBody> = Vec::with_capacity(files.len());
+    for file in files {
+        let blob: BlobResponse = client
+            .post(
+                &format!("/repos/{owner}/{repo}/git/blobs"),
+                &BlobBody {
+                    content: file.content.clone(),
+                    encoding: "utf-8".to_string(),
+                },
+            )
+            .with_context(|| format!("Failed to create blob for '{}'", file.path))?;
+        tree_items.push(TreeItemBody {
+            path: file.path.clone(),
+            mode: "100644".to_string(),
+            item_type: "blob".to_string(),
+            sha: blob.sha,
+        });
+    }
+
+    // 2. Resolve parent commit + base tree (None for empty repo)
+    let (parent_sha, base_tree) =
+        if let Some(commit_sha) = get_branch_sha_opt(client, owner, repo, branch) {
+            let commit: CommitInfo = client
+                .get(&format!("/repos/{owner}/{repo}/git/commits/{commit_sha}"))
+                .context("Failed to fetch parent commit")?;
+            let tree_sha = commit.tree.map(|t| t.sha);
+            (Some(commit_sha), tree_sha)
+        } else {
+            (None, None)
+        };
+
+    // 3. Create tree
+    let tree: TreeResponse = client
+        .post(
+            &format!("/repos/{owner}/{repo}/git/trees"),
+            &CreateTreeBody {
+                tree: tree_items,
+                base_tree,
+            },
         )
-    })
+        .context("Failed to create git tree")?;
+
+    // 4. Create commit
+    let parents: Vec<String> = parent_sha.into_iter().collect();
+    let commit: CommitInfo = client
+        .post(
+            &format!("/repos/{owner}/{repo}/git/commits"),
+            &CreateCommitBody {
+                message: message.to_string(),
+                tree: tree.sha,
+                parents: parents.clone(),
+            },
+        )
+        .context("Failed to create git commit")?;
+
+    let commit_sha = commit.sha;
+
+    // 5. Create or update the branch ref
+    if parents.is_empty() {
+        client
+            .post::<_, serde_json::Value>(
+                &format!("/repos/{owner}/{repo}/git/refs"),
+                &CreateRefBody {
+                    ref_name: format!("refs/heads/{branch}"),
+                    sha: commit_sha.clone(),
+                },
+            )
+            .context("Failed to create branch ref")?;
+    } else {
+        client
+            .patch::<_, serde_json::Value>(
+                &format!("/repos/{owner}/{repo}/git/refs/heads/{branch}"),
+                &UpdateRefBody {
+                    sha: commit_sha.clone(),
+                    force: false,
+                },
+            )
+            .context("Failed to update branch ref")?;
+    }
+
+    Ok(commit_sha)
 }
