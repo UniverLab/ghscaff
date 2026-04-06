@@ -1,6 +1,6 @@
 [package]
 name = "ghscaff"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Interactive CLI wizard for creating and configuring GitHub repositories"
 license = "MIT"
