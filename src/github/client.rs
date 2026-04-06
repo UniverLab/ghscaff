@@ -66,6 +66,21 @@ impl GithubClient {
             .context("Failed to parse response")
     }
 
+    pub fn put_no_response<B: serde::Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        let url = format!("https://api.github.com{path}");
+        self.client
+            .put(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .header("User-Agent", "ghscaff")
+            .header("Accept", "application/vnd.github+json")
+            .json(body)
+            .send()
+            .context("HTTP PUT failed")?
+            .error_for_status()
+            .context("GitHub API error")?;
+        Ok(())
+    }
+
     pub fn patch<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         path: &str,

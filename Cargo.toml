@@ -25,6 +25,9 @@ tar = "0.4"
 walkdir = "2"
 dirs = "6"
 urlencoding = "2"
+toml = "0.8"
+crypto_box = "0.9"
+blake2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,10 +1,10 @@
 use anyhow::Result;
-use inquire::{Confirm, MultiSelect, Select, Text};
+use inquire::{Confirm, MultiSelect, Password, Select, Text};
 
 use crate::github::{
     branches,
     client::{token_from_env, GithubClient},
-    contents, labels, repo,
+    contents, labels, repo, secrets,
 };
 use crate::templates;
 
@@ -159,7 +159,8 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
     print!("  Fetching boilerplate template... ");
     let tmpl = templates::resolve(&c.language, token)?;
     println!("ok");
-    let total = count_steps(c, tmpl.as_ref());
+    let secret_specs = templates::load_secrets(&c.language);
+    let total = count_steps(c, tmpl.as_ref(), &secret_specs);
     let mut step = 0usize;
 
     macro_rules! step {
@@ -319,6 +320,18 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
+    // 10. Secrets from template
+    for spec in &secret_specs {
+        let value = Password::new(&format!("Secret {}:", spec.name))
+            .with_help_message(&spec.description)
+            .without_confirmation()
+            .prompt()?;
+        step!(&format!("configure secret {}", spec.name), {
+            secrets::set_secret(client, owner, name, &spec.name, &value)?;
+            Ok::<(), anyhow::Error>(())
+        });
+    }
+
     println!();
     if let Some(r) = created_repo {
         println!("  Done  —  {}", r.html_url);
@@ -329,7 +342,7 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
     Ok(())
 }
 
-fn count_steps(c: &WizardConfig, tmpl: &dyn templates::LanguageTemplate) -> usize {
+fn count_steps(c: &WizardConfig, tmpl: &dyn templates::LanguageTemplate, secrets: &[templates::SecretSpec]) -> usize {
     let mut n = 1; // create repo
     n += tmpl.boilerplate_files(&c.name, &c.description, &c.owner).len();
     n += 1; // .gitignore
@@ -350,5 +363,6 @@ fn count_steps(c: &WizardConfig, tmpl: &dyn templates::LanguageTemplate) -> usiz
     if !c.topics.is_empty() {
         n += 1;
     }
+    n += secrets.len();
     n
 }

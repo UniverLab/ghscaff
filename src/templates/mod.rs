@@ -1,6 +1,7 @@
 pub mod rust;
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 const BOILERPLATE_REPO: &str = "UniverLab/ghscaff-boilerplate";
@@ -196,6 +197,43 @@ pub fn apply_placeholders(dir: &Path, name: &str, description: &str, author: &st
 }
 
 pub const AVAILABLE: &[&str] = &["rust"];
+
+/// A secret required by a template (declared in secrets.toml).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecretSpec {
+    pub name: String,
+    pub description: String,
+    #[serde(default = "default_true")]
+    #[allow(dead_code)]
+    pub required: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct SecretsFile {
+    #[serde(default)]
+    secrets: Vec<SecretSpec>,
+}
+
+/// Load secrets declared by the cached template, if any.
+/// Returns an empty vec if no secrets.toml exists or it cannot be parsed.
+pub fn load_secrets(language: &str) -> Vec<SecretSpec> {
+    let path = cache_dir()
+        .ok()
+        .map(|d| d.join(language).join("secrets.toml"));
+    let Some(path) = path.filter(|p| p.exists()) else {
+        return vec![];
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return vec![];
+    };
+    toml::from_str::<SecretsFile>(&content)
+        .map(|f| f.secrets)
+        .unwrap_or_default()
+}
 
 #[cfg(test)]
 mod tests {

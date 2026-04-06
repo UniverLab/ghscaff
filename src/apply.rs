@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::process::Command;
 
-use crate::github::{client::GithubClient, labels, repo};
+use crate::github::{client::GithubClient, labels, repo, secrets};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -316,8 +316,51 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     }
 
     // 4. Merge topics
-    if merge_topics(&client, &owner, &repo_name, &["github", "scaffold"], false)? {
-        println!("  ✓ Topics updated");
+    match merge_topics(&client, &owner, &repo_name, &["github", "scaffold"], false) {
+        Ok(true) => println!("  ✓ Topics updated"),
+        Ok(false) => {}
+        Err(e) => {
+            let msg = format!("{e:#}");
+            if msg.contains("403") {
+                println!("  ⚠ Topics skipped (403 Forbidden) — token may lack org write access");
+            } else {
+                println!("  ⚠ Topics failed: {msg}");
+            }
+        }
+    }
+
+    // 5. Secrets from template
+    let secret_specs = crate::templates::load_secrets("rust");
+    if !secret_specs.is_empty() {
+        let existing = secrets::list_secret_names(&client, &owner, &repo_name)
+            .unwrap_or_default();
+        let missing: Vec<_> = secret_specs
+            .iter()
+            .filter(|s| !existing.iter().any(|e| e == &s.name))
+            .collect();
+        if !missing.is_empty() {
+            println!();
+            println!("  ◆ Secrets required by template:");
+            for spec in &missing {
+                println!("    • {} — {}", spec.name, spec.description);
+            }
+            println!();
+            let configure = inquire::Confirm::new("Configure missing secrets now?")
+                .with_default(true)
+                .prompt()?;
+            if configure {
+                for spec in missing {
+                    let value = inquire::Password::new(&format!("Secret {}:", spec.name))
+                        .with_help_message(&spec.description)
+                        .without_confirmation()
+                        .prompt()?;
+                    match secrets::set_secret(&client, &owner, &repo_name, &spec.name, &value) {
+                        Ok(()) => println!("  ✓ Secret {} configured", spec.name),
+                        Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
+                    }
+                }
+            }
+        }
     }
 
     println!();
