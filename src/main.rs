@@ -91,7 +91,11 @@ fn is_newer(current: &str, latest: &str) -> bool {
     let parse = |v: &str| -> (u64, u64, u64) {
         let v = v.trim_start_matches('v');
         let p: Vec<u64> = v.split('.').filter_map(|s| s.parse().ok()).collect();
-        (*p.first().unwrap_or(&0), *p.get(1).unwrap_or(&0), *p.get(2).unwrap_or(&0))
+        (
+            *p.first().unwrap_or(&0),
+            *p.get(1).unwrap_or(&0),
+            *p.get(2).unwrap_or(&0),
+        )
     };
     parse(latest) > parse(current)
 }

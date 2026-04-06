@@ -25,9 +25,18 @@ impl LanguageTemplate for RustTemplate {
         let readme = format!("# {repo_name}\n\n{description}\n");
 
         vec![
-            RepoFile { path: "Cargo.toml".into(), content: cargo_toml },
-            RepoFile { path: "src/main.rs".into(), content: main_rs },
-            RepoFile { path: "README.md".into(), content: readme },
+            RepoFile {
+                path: "Cargo.toml".into(),
+                content: cargo_toml,
+            },
+            RepoFile {
+                path: "src/main.rs".into(),
+                content: main_rs,
+            },
+            RepoFile {
+                path: "README.md".into(),
+                content: readme,
+            },
         ]
     }
 

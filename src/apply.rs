@@ -101,7 +101,12 @@ pub fn get_repo_state(client: &GithubClient, owner: &str, repo_name: &str) -> Re
     })
 }
 
-fn check_branch_exists(client: &GithubClient, owner: &str, repo: &str, branch: &str) -> Result<bool> {
+fn check_branch_exists(
+    client: &GithubClient,
+    owner: &str,
+    repo: &str,
+    branch: &str,
+) -> Result<bool> {
     let path = format!("/repos/{owner}/{repo}/git/ref/heads/{branch}");
     match client.get::<serde_json::Value>(&path) {
         Ok(_) => Ok(true),
@@ -286,11 +291,7 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     // 2. Branch protection (skip if already enabled, warn on failure)
     if !ctx.branch_protection_enabled {
         match crate::github::branches::apply_branch_protection(
-            &client,
-            &owner,
-            &repo_name,
-            "main",
-            "CI",
+            &client, &owner, &repo_name, "main", "CI",
         ) {
             Ok(()) => println!("  ✓ Branch protection applied"),
             Err(e) => {
@@ -332,8 +333,7 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     // 5. Secrets from template
     let secret_specs = crate::templates::load_secrets("rust");
     if !secret_specs.is_empty() {
-        let existing = secrets::list_secret_names(&client, &owner, &repo_name)
-            .unwrap_or_default();
+        let existing = secrets::list_secret_names(&client, &owner, &repo_name).unwrap_or_default();
         let missing: Vec<_> = secret_specs
             .iter()
             .filter(|s| !existing.iter().any(|e| e == &s.name))
@@ -348,14 +348,17 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
             for spec in missing {
                 if let Ok(env_val) = std::env::var(&spec.name) {
                     match secrets::set_secret(&client, &owner, &repo_name, &spec.name, &env_val) {
-                        Ok(()) => println!("  ✓ Secret {} configured (from environment)", spec.name),
+                        Ok(()) => {
+                            println!("  ✓ Secret {} configured (from environment)", spec.name)
+                        }
                         Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
                     }
                 } else {
-                    let ans = inquire::Password::new(&format!("Secret {} (enter to skip):", spec.name))
-                        .with_help_message(&spec.description)
-                        .without_confirmation()
-                        .prompt_skippable()?;
+                    let ans =
+                        inquire::Password::new(&format!("Secret {} (enter to skip):", spec.name))
+                            .with_help_message(&spec.description)
+                            .without_confirmation()
+                            .prompt_skippable()?;
                     match ans.as_deref() {
                         Some(v) if !v.is_empty() => {
                             match secrets::set_secret(&client, &owner, &repo_name, &spec.name, v) {
@@ -386,11 +389,7 @@ fn parse_owner_repo(input: &str) -> Result<(String, String)> {
     Ok((parts[0].to_string(), parts[1].to_string()))
 }
 
-fn create_develop_branch(
-    client: &GithubClient,
-    owner: &str,
-    repo_name: &str,
-) -> Result<()> {
+fn create_develop_branch(client: &GithubClient, owner: &str, repo_name: &str) -> Result<()> {
     use crate::github::branches;
     let main_sha = branches::get_branch_sha(client, owner, repo_name, "main")?;
     branches::create_branch(client, owner, repo_name, "develop", &main_sha)?;

@@ -51,7 +51,9 @@ fn sealed_box_encrypt(recipient_pk: &PublicKey, plaintext: &[u8]) -> Vec<u8> {
 
     let nonce = GenericArray::from_slice(&nonce_bytes);
     let salsa = SalsaBox::new(recipient_pk, &ephemeral_sk);
-    let ciphertext = salsa.encrypt(nonce, plaintext).expect("encryption cannot fail");
+    let ciphertext = salsa
+        .encrypt(nonce, plaintext)
+        .expect("encryption cannot fail");
 
     let mut result = Vec::with_capacity(32 + ciphertext.len());
     result.extend_from_slice(ephemeral_pk.as_bytes());

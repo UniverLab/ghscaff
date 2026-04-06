@@ -206,12 +206,18 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
 
     // Template files (boilerplate — all files including ci.yml, release.yml, etc.)
     for f in tmpl.boilerplate_files(name, &c.description, owner) {
-        init_files.push(contents::TreeFile { path: f.path, content: f.content });
+        init_files.push(contents::TreeFile {
+            path: f.path,
+            content: f.content,
+        });
     }
 
     // .gitignore — fetched fresh from GitHub's gitignore API
     let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
-    init_files.push(contents::TreeFile { path: ".gitignore".into(), content: gitignore });
+    init_files.push(contents::TreeFile {
+        path: ".gitignore".into(),
+        content: gitignore,
+    });
 
     // LICENSE (placeholder — user replaces it or CI generates it)
     if let Some(lic) = &c.license {
@@ -219,7 +225,10 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
             "# {} License\n\nSee https://opensource.org/licenses/{} for the full license text.\n",
             lic, lic
         );
-        init_files.push(contents::TreeFile { path: "LICENSE".into(), content: license_text });
+        init_files.push(contents::TreeFile {
+            path: "LICENSE".into(),
+            content: license_text,
+        });
     }
 
     // 3. Single init commit with all files
@@ -246,10 +255,13 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
     }
 
     // 5. Branch protection — always applied to main (and develop if created)
-    step!(&format!("apply branch protection ({})", c.default_branch), {
-        branches::apply_branch_protection(client, owner, name, &c.default_branch, "build")?;
-        Ok::<(), anyhow::Error>(())
-    });
+    step!(
+        &format!("apply branch protection ({})", c.default_branch),
+        {
+            branches::apply_branch_protection(client, owner, name, &c.default_branch, "build")?;
+            Ok::<(), anyhow::Error>(())
+        }
+    );
     if c.create_develop {
         step!("apply branch protection (develop)", {
             branches::apply_branch_protection(client, owner, name, "develop", "build")?;

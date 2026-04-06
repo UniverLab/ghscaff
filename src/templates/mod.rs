@@ -31,7 +31,13 @@ struct RemoteTemplate {
 }
 
 impl RemoteTemplate {
-    fn apply_placeholders(&self, content: &str, name: &str, description: &str, owner: &str) -> String {
+    fn apply_placeholders(
+        &self,
+        content: &str,
+        name: &str,
+        description: &str,
+        owner: &str,
+    ) -> String {
         content
             .replace("{{name}}", name)
             .replace("{{description}}", description)
@@ -40,8 +46,8 @@ impl RemoteTemplate {
     }
 
     fn gitignore_from_toml(&self) -> String {
-        let content = std::fs::read_to_string(self.cache_dir.join("template.toml"))
-            .unwrap_or_default();
+        let content =
+            std::fs::read_to_string(self.cache_dir.join("template.toml")).unwrap_or_default();
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("template = ") {
@@ -67,12 +73,16 @@ impl LanguageTemplate for RemoteTemplate {
             .filter(|e| e.path().is_file())
         {
             let path = entry.path();
-            let Ok(rel_path) = path.strip_prefix(&self.cache_dir) else { continue };
+            let Ok(rel_path) = path.strip_prefix(&self.cache_dir) else {
+                continue;
+            };
             let rel = rel_path.to_string_lossy().replace('\\', "/");
             if SKIP_FILES.iter().any(|s| rel == *s) {
                 continue;
             }
-            let Ok(raw) = std::fs::read_to_string(path) else { continue };
+            let Ok(raw) = std::fs::read_to_string(path) else {
+                continue;
+            };
             let content = self.apply_placeholders(&raw, name, description, owner);
             files.push(RepoFile { path: rel, content });
         }
@@ -88,7 +98,11 @@ impl LanguageTemplate for RemoteTemplate {
 /// Download the template from `BOILERPLATE_REPO` and cache locally.
 /// Requires an authenticated token to avoid rate limits.
 /// When `force_refresh` is true, the cache is deleted and re-downloaded.
-pub fn resolve(language: &str, token: &str, force_refresh: bool) -> Result<Box<dyn LanguageTemplate>> {
+pub fn resolve(
+    language: &str,
+    token: &str,
+    force_refresh: bool,
+) -> Result<Box<dyn LanguageTemplate>> {
     if !AVAILABLE.contains(&language) {
         anyhow::bail!(
             "Unknown language: {language}. Available: {}",
@@ -159,7 +173,9 @@ pub fn apply_placeholders(dir: &Path, name: &str, description: &str, author: &st
         if !path.is_file() {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(path) else { continue };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
         let replaced = content
             .replace("{{name}}", name)
             .replace("{{description}}", description)
