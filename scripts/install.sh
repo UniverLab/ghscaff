@@ -1,9 +1,9 @@
 #!/bin/sh
 # install.sh — download and install ghscaff from GitHub Releases
-# Usage: curl -fsSL https://raw.githubusercontent.com/JheisonMB/ghscaff/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.sh | sh
 set -eu
 
-REPO="JheisonMB/ghscaff"
+REPO="UniverLab/ghscaff"
 BINARY="ghscaff"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 

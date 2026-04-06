@@ -12,7 +12,7 @@
  ░░░░░░                                                                   
 ```
 
-[![CI](https://github.com/JheisonMB/ghscaff/actions/workflows/ci.yml/badge.svg)](https://github.com/JheisonMB/ghscaff/actions/workflows/ci.yml)
+[![CI](https://github.com/UniverLab/ghscaff/actions/workflows/ci.yml/badge.svg)](https://github.com/UniverLab/ghscaff/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Interactive CLI wizard for creating and configuring GitHub repositories. One binary, zero runtime dependencies.
@@ -29,6 +29,8 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 - **🚀 Language templates** — Rust (v1), Python/Node.js/Java coming soon
 - **📝 Boilerplate files** — README, Cargo.toml, CI/CD workflows, LICENSE
 - **🔐 Token validation** — Fail-fast authentication checks
+- **🔑 Template secrets** — Automatically configures required GitHub Actions secrets per template
+- **⬆️ Self-update** — Detects new releases on startup and offers one-command upgrade
 
 ---
 
@@ -39,13 +41,13 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 **Linux / macOS:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JheisonMB/ghscaff/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/JheisonMB/ghscaff/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.ps1 | iex
 ```
 
 This downloads and installs `ghscaff`. No Rust toolchain required.
@@ -54,10 +56,10 @@ You can customize the install:
 
 ```bash
 # Pin a specific version
-VERSION=0.1.0 curl -fsSL https://raw.githubusercontent.com/JheisonMB/ghscaff/main/install.sh | sh
+VERSION=0.1.0 curl -fsSL https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.sh | sh
 
 # Install to a custom directory
-INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/JheisonMB/ghscaff/main/install.sh | sh
+INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.sh | sh
 ```
 
 ### Via cargo
@@ -71,7 +73,7 @@ Available on [crates.io](https://crates.io/crates/ghscaff).
 ### From source
 
 ```bash
-git clone https://github.com/JheisonMB/ghscaff.git
+git clone https://github.com/UniverLab/ghscaff.git
 cd ghscaff
 cargo build --release
 # Binary at target/release/ghscaff
@@ -79,7 +81,7 @@ cargo build --release
 
 ### GitHub Releases
 
-Check the [Releases](https://github.com/JheisonMB/ghscaff/releases) page for precompiled binaries (Linux x86_64, macOS x86_64/ARM64, Windows x86_64).
+Check the [Releases](https://github.com/UniverLab/ghscaff/releases) page for precompiled binaries (Linux x86_64, macOS x86_64/ARM64, Windows x86_64).
 
 ### Uninstall
 
@@ -343,8 +345,8 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ## Support
 
-- 📖 [GitHub Issues](https://github.com/JheisonMB/ghscaff/issues) — Report bugs or request features
-- 💬 [Discussions](https://github.com/JheisonMB/ghscaff/discussions) — Ask questions
+- 📖 [GitHub Issues](https://github.com/UniverLab/ghscaff/issues) — Report bugs or request features
+- 💬 [Discussions](https://github.com/UniverLab/ghscaff/discussions) — Ask questions
 - 🐦 Twitter: [@JheisonMB](https://twitter.com/JheisonMB)
 
 ---

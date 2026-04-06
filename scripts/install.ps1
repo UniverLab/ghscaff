@@ -1,5 +1,5 @@
 # install.ps1 — download and install ghscaff on Windows
-# Usage: irm https://raw.githubusercontent.com/JheisonMB/ghscaff/main/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.ps1 | iex
 #
 # Options (set as env vars before running):
 #   $env:VERSION    = "0.1.0"           # pin a specific version
@@ -7,7 +7,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$Repo       = "JheisonMB/ghscaff"
+$Repo       = "UniverLab/ghscaff"
 $Binary     = "ghscaff.exe"
 $Target     = "x86_64-pc-windows-msvc"
 $InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { "$env:USERPROFILE\.local\bin" }

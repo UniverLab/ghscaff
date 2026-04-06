@@ -58,7 +58,7 @@ fn check_for_update() {
         return;
     };
     let Ok(resp) = client
-        .get("https://api.github.com/repos/JheisonMB/ghscaff/releases/latest")
+        .get("https://api.github.com/repos/UniverLab/ghscaff/releases/latest")
         .send()
     else {
         return;
@@ -102,7 +102,7 @@ fn run_installer() {
         let _ = std::process::Command::new("powershell")
             .args([
                 "-Command",
-                "irm https://raw.githubusercontent.com/JheisonMB/ghscaff/main/scripts/install.ps1 | iex",
+                "irm https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.ps1 | iex",
             ])
             .status();
     }
@@ -111,7 +111,7 @@ fn run_installer() {
         match std::process::Command::new("sh")
             .args([
                 "-c",
-                "curl -fsSL https://raw.githubusercontent.com/JheisonMB/ghscaff/main/scripts/install.sh | sh",
+                "curl -fsSL https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.sh | sh",
             ])
             .status()
         {

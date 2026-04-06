@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Interactive CLI wizard for creating and configuring GitHub repositories"
 license = "MIT"
-repository = "https://github.com/JheisonMB/ghscaff"
+repository = "https://github.com/UniverLab/ghscaff"
 keywords = ["github", "cli", "scaffold", "wizard"]
 categories = ["command-line-utilities", "development-tools"]
 
