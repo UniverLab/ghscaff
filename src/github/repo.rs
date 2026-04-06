@@ -19,6 +19,7 @@ pub struct Repo {
     pub full_name: String,
     pub html_url: String,
     pub default_branch: String,
+    pub topics: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -49,7 +50,7 @@ pub fn create_repo(
         name,
         description,
         private,
-        auto_init: false,
+        auto_init: true,
     };
     if is_org {
         client.post(&format!("/orgs/{owner}/repos"), &body)
@@ -65,4 +66,20 @@ pub fn get_gitignore_template(client: &GithubClient, name: &str) -> Result<Strin
     }
     let t: Template = client.get(&format!("/gitignore/templates/{name}"))?;
     Ok(t.source)
+}
+
+pub fn get_repo(client: &GithubClient, owner: &str, name: &str) -> Result<Repo> {
+    client.get(&format!("/repos/{owner}/{name}"))
+}
+
+pub fn set_topics(client: &GithubClient, owner: &str, name: &str, topics: &[String]) -> Result<()> {
+    #[derive(Serialize)]
+    struct TopicsBody {
+        names: Vec<String>,
+    }
+    let body = TopicsBody {
+        names: topics.to_vec(),
+    };
+    let _: serde_json::Value = client.put(&format!("/repos/{owner}/{name}/topics"), &body)?;
+    Ok(())
 }
