@@ -28,10 +28,18 @@ if ($env:VERSION) {
     $Tag = "v$($env:VERSION)"
     Info "version" "$Tag (pinned)"
 } else {
-    $latest = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
-    $Tag = $latest.tag_name
-    if (-not $Tag) { Fail "Could not resolve latest release tag" }
-    Info "version" "$Tag (latest)"
+    # Get latest stable release (exclude prerelease)
+    $releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases"
+    $stable = $releases | Where-Object { -not $_.prerelease } | Select-Object -First 1
+    if ($stable) {
+        $Tag = $stable.tag_name
+    } else {
+        # Fallback to latest if no stable found
+        $latest = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
+        $Tag = $latest.tag_name
+    }
+    if (-not $Tag) { Fail "Could not resolve latest stable release" }
+    Info "version" "$Tag (latest stable)"
 }
 
 # --- download ---

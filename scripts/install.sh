@@ -36,14 +36,19 @@ trap 'rm -rf "$TMPDIR"' EXIT
 # 1. Install ghscaff
 # ============================================================
 
-# --- resolve latest version ---
+# --- resolve version ---
 if [ -n "${VERSION:-}" ]; then
   TAG="v$VERSION"
   info "version" "$TAG (pinned)"
 else
-  TAG=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | rev | cut -d'/' -f1 | rev)
-  [ -z "$TAG" ] && error "Could not resolve latest release tag"
-  info "version" "$TAG (latest)"
+  # Get latest stable release (exclude prerelease)
+  TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases" | grep -i '"tag_name"' | grep -v 'prerelease.*true' | head -1 | cut -d'"' -f4)
+  if [ -z "$TAG" ]; then
+    # Fallback to latest if no stable found
+    TAG=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | rev | cut -d'/' -f1 | rev)
+  fi
+  [ -z "$TAG" ] && error "Could not resolve latest stable release"
+  info "version" "$TAG (latest stable)"
 fi
 
 # --- download ---
