@@ -345,18 +345,28 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
                 println!("    • {} — {}", spec.name, spec.description);
             }
             println!();
-            let configure = inquire::Confirm::new("Configure missing secrets now?")
-                .with_default(true)
-                .prompt()?;
-            if configure {
-                for spec in missing {
-                    let value = inquire::Password::new(&format!("Secret {}:", spec.name))
+            for spec in missing {
+                if let Ok(env_val) = std::env::var(&spec.name) {
+                    match secrets::set_secret(&client, &owner, &repo_name, &spec.name, &env_val) {
+                        Ok(()) => println!("  ✓ Secret {} configured (from environment)", spec.name),
+                        Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
+                    }
+                } else {
+                    let ans = inquire::Password::new(&format!("Secret {} (enter to skip):", spec.name))
                         .with_help_message(&spec.description)
                         .without_confirmation()
-                        .prompt()?;
-                    match secrets::set_secret(&client, &owner, &repo_name, &spec.name, &value) {
-                        Ok(()) => println!("  ✓ Secret {} configured", spec.name),
-                        Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
+                        .prompt_skippable()?;
+                    match ans.as_deref() {
+                        Some(v) if !v.is_empty() => {
+                            match secrets::set_secret(&client, &owner, &repo_name, &spec.name, v) {
+                                Ok(()) => println!("  ✓ Secret {} configured", spec.name),
+                                Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
+                            }
+                        }
+                        _ => println!(
+                            "  ⚠ Secret {} skipped — set ${} and re-run `ghscaff apply`",
+                            spec.name, spec.name
+                        ),
                     }
                 }
             }

@@ -320,16 +320,34 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
-    // 10. Secrets from template
+    // 10. Secrets from template — read from env first, prompt if missing, warn if skipped
     for spec in &secret_specs {
-        let value = Password::new(&format!("Secret {}:", spec.name))
-            .with_help_message(&spec.description)
-            .without_confirmation()
-            .prompt()?;
-        step!(&format!("configure secret {}", spec.name), {
-            secrets::set_secret(client, owner, name, &spec.name, &value)?;
-            Ok::<(), anyhow::Error>(())
-        });
+        let value = if let Ok(env_val) = std::env::var(&spec.name) {
+            println!("  ◆ Secret {}: using value from environment", spec.name);
+            Some(env_val)
+        } else {
+            let ans = Password::new(&format!("Secret {} (enter to skip):", spec.name))
+                .with_help_message(&spec.description)
+                .without_confirmation()
+                .prompt_skippable()?;
+            if ans.as_deref().map(str::is_empty).unwrap_or(true) {
+                println!(
+                    "  ⚠ Secret {} not configured — set ${} and re-run `ghscaff apply`",
+                    spec.name, spec.name
+                );
+                None
+            } else {
+                ans
+            }
+        };
+        if let Some(val) = value {
+            step!(&format!("configure secret {}", spec.name), {
+                secrets::set_secret(client, owner, name, &spec.name, &val)?;
+                Ok::<(), anyhow::Error>(())
+            });
+        } else {
+            step += 1; // count the step even if skipped so total stays consistent
+        }
     }
 
     println!();
