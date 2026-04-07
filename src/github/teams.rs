@@ -30,7 +30,7 @@ pub fn add_team_to_repo(
     let body = AddTeamBody {
         permission: permission.to_string(),
     };
-    client.put_no_response(&format!("/repos/{owner}/{repo}/teams/{team_slug}"), &body)
+    client.put_no_response(&format!("/orgs/{owner}/teams/{team_slug}/repos/{owner}/{repo}"), &body)
 }
 
 #[derive(Clone, Debug)]
