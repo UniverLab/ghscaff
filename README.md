@@ -24,6 +24,7 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 - **🪄 Interactive wizard** — Create GitHub repos with a conversational guided flow
 - **⚡ Zero dependencies** — Single binary, no runtime requirements
 - **🔄 Idempotent apply mode** — Configure existing repos without recreation
+- **👥 Team access control** — Assign repositories to organization teams with custom permissions (read, triage, write, admin)
 - **🏷️ Smart labels** — Auto-create 6 core issue labels
 - **🛡️ Branch protection** — Enforce reviews, status checks, and workflow validation
 - **🚀 Language templates** — Rust (v1), Python/Node.js/Java coming soon
@@ -115,19 +116,21 @@ ghscaff --dry-run
 
 ## Wizard Flow
 
-The wizard guides you through **6 interactive steps**:
+The wizard guides you through **7 interactive steps**:
 
 1. **Repository basics** — Name, description, topics
 2. **Visibility & ownership** — Public/Private, personal or org
-3. **Language / template** — Choose boilerplate (Rust, Python, etc.)
-4. **Branches** — Default branch, develop branch
-5. **Features** — LICENSE, standard labels
-6. **Review & confirm** — Verify all settings before creation
+3. **Team access** (org only) — Select teams and assign permissions (pull, triage, push, admin)
+4. **Language / template** — Choose boilerplate (Rust, Python, etc.)
+5. **Branches** — Default branch, develop branch
+6. **Features** — LICENSE, standard labels
+7. **Review & confirm** — Verify all settings before creation
 
 Then **automatically**:
 - Creates the repository
 - Commits all boilerplate files in a single atomic commit (`chore: init repository`)
 - Applies branch protection to main (and develop if created)
+- Adds selected teams with their assigned permissions
 - Syncs labels, topics, and CI/CD workflows
 - Configures required GitHub Actions secrets from `secrets.toml`
 
@@ -141,6 +144,10 @@ Then **automatically**:
   > Topics: rust, cli, tool
   > Visibility: Public
   > Owner: UniverLab
+  Fetching teams... ok
+  > Select teams to add: backend, devops
+  > Permission for backend team: push
+  > Permission for devops team: pull
   > Language: rust
   > Default branch: main
   > Create develop branch? Yes
@@ -150,13 +157,15 @@ Then **automatically**:
   Apply these changes? Yes
 
   Fetching boilerplate template... ok
-  [1/7] create repo UniverLab/my-rust-cli... ok  (https://github.com/UniverLab/my-rust-cli)
-  [2/7] init repository... ok
-  [3/7] create develop branch... ok
-  [4/7] apply branch protection (main)... ok
-  [5/7] apply branch protection (develop)... ok
-  [6/7] sync labels... ok
-  [7/7] set topics... ok
+  [1/9] create repo UniverLab/my-rust-cli... ok  (https://github.com/UniverLab/my-rust-cli)
+  [2/9] init repository... ok
+  [3/9] create develop branch... ok
+  [4/9] apply branch protection (main)... ok
+  [5/9] apply branch protection (develop)... ok
+  [6/9] sync labels... ok
+  [7/9] set topics... ok
+  [8/9] add team backend with push access... ok
+  [9/9] add team devops with pull access... ok
 
   Done  —  https://github.com/UniverLab/my-rust-cli
 ```
@@ -213,8 +222,11 @@ ghscaff
 **Required token scopes:**
 - `repo` — Repository access
 - `workflow` — GitHub Actions access
+- `read:org` — (Optional, for team access feature) Organization and team access
 
 If the token is missing or invalid, ghscaff fails immediately with a clear error message before prompting anything else.
+
+**Note on team access:** If your token lacks the `read:org` scope, the wizard will skip the team selection step with a warning, but the rest of the repository setup will continue normally.
 
 **Security note:** Never hardcode tokens. Use environment variables or secret managers.
 
