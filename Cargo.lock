@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "ghscaff"
-version = "0.1.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64",
