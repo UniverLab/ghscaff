@@ -80,10 +80,7 @@ fn collect_team_access(client: &GithubClient, _org: &str) -> Result<Vec<teams::T
         return Ok(vec![]);
     }
 
-    let team_names: Vec<String> = org_teams
-        .iter()
-        .map(|t| t.name.clone())
-        .collect();
+    let team_names: Vec<String> = org_teams.iter().map(|t| t.name.clone()).collect();
 
     let selected_teams = MultiSelect::new("Select teams to add:", team_names)
         .with_help_message("space select  enter confirm  (leave empty for no teams)")

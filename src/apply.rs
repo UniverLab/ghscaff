@@ -280,10 +280,7 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     if want_teams {
         if let Ok(org_teams) = list_org_teams(&client, &owner) {
             if !org_teams.is_empty() {
-                let team_names: Vec<String> = org_teams
-                    .iter()
-                    .map(|t| t.name.clone())
-                    .collect();
+                let team_names: Vec<String> = org_teams.iter().map(|t| t.name.clone()).collect();
 
                 if let Ok(Some(selections)) =
                     inquire::MultiSelect::new("Select teams:", team_names.clone())
@@ -291,7 +288,9 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
                         .prompt_skippable()
                 {
                     for selected_team_display in selections {
-                        if let Some(team) = org_teams.iter().find(|t| t.name == selected_team_display) {
+                        if let Some(team) =
+                            org_teams.iter().find(|t| t.name == selected_team_display)
+                        {
                             let permission = inquire::Select::new(
                                 &format!("Permission for {} team:", team.name),
                                 vec!["pull", "triage", "push", "admin"],
