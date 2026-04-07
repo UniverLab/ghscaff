@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::process::Command;
 
-use crate::github::{client::GithubClient, labels, repo, secrets};
+use crate::github::{client::GithubClient, labels, repo, secrets, teams};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -271,6 +271,44 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     }
 
     println!();
+    let mut selected_teams: Vec<teams::TeamAccess> = vec![];
+
+    let want_teams = inquire::Confirm::new("Add team access?")
+        .with_default(false)
+        .prompt()?;
+
+    if want_teams {
+        if let Ok(org_teams) = list_org_teams(&client, &owner) {
+            if !org_teams.is_empty() {
+                let team_names: Vec<String> = org_teams.iter().map(|t| t.name.clone()).collect();
+
+                if let Ok(Some(selections)) =
+                    inquire::MultiSelect::new("Select teams:", team_names.clone())
+                        .with_help_message("space select  enter confirm")
+                        .prompt_skippable()
+                {
+                    for selected_team_display in selections {
+                        if let Some(team) =
+                            org_teams.iter().find(|t| t.name == selected_team_display)
+                        {
+                            let permission = inquire::Select::new(
+                                &format!("Permission for {} team:", team.name),
+                                vec!["pull", "triage", "push", "admin"],
+                            )
+                            .prompt()?;
+
+                            selected_teams.push(teams::TeamAccess {
+                                team_slug: team.slug.clone(),
+                                permission: permission.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println!();
     let confirmed = inquire::Confirm::new("Apply these changes?")
         .with_default(true)
         .prompt()?;
@@ -330,7 +368,35 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
         }
     }
 
-    // 5. Secrets from template
+    // 5. Team access
+    for team in &selected_teams {
+        match add_team_to_repo(
+            &client,
+            &owner,
+            &repo_name,
+            &team.team_slug,
+            &team.permission,
+            false,
+        ) {
+            Ok(()) => println!(
+                "  ✓ Team {} added with {} access",
+                team.team_slug, team.permission
+            ),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                if msg.contains("403") {
+                    println!(
+                        "  ⚠ Team {} skipped (403 Forbidden) — token may lack org write access",
+                        team.team_slug
+                    );
+                } else {
+                    println!("  ⚠ Failed to add team {}: {msg}", team.team_slug);
+                }
+            }
+        }
+    }
+
+    // 6. Secrets from template
     let secret_specs = crate::templates::load_secrets("rust");
     if !secret_specs.is_empty() {
         let existing = secrets::list_secret_names(&client, &owner, &repo_name).unwrap_or_default();
@@ -387,6 +453,26 @@ fn parse_owner_repo(input: &str) -> Result<(String, String)> {
         anyhow::bail!("Invalid repo format. Use: owner/repo");
     }
     Ok((parts[0].to_string(), parts[1].to_string()))
+}
+
+/// List teams available in organization
+pub fn list_org_teams(client: &GithubClient, _owner: &str) -> Result<Vec<teams::Team>> {
+    teams::list_teams(client)
+}
+
+/// Add team to repository with specified permission
+pub fn add_team_to_repo(
+    client: &GithubClient,
+    owner: &str,
+    repo_name: &str,
+    team_slug: &str,
+    permission: &str,
+    dry_run: bool,
+) -> Result<()> {
+    if !dry_run {
+        teams::add_team_to_repo(client, owner, repo_name, team_slug, permission)?;
+    }
+    Ok(())
 }
 
 fn create_develop_branch(client: &GithubClient, owner: &str, repo_name: &str) -> Result<()> {
