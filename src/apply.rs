@@ -291,9 +291,10 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
                         .prompt_skippable()
                 {
                     for selected_team_display in selections {
-                        if let Some(team) = org_teams.iter().find(|t| {
-                            format!("{} ({})", t.name, t.slug) == selected_team_display
-                        }) {
+                        if let Some(team) = org_teams
+                            .iter()
+                            .find(|t| format!("{} ({})", t.name, t.slug) == selected_team_display)
+                        {
                             let permission = inquire::Select::new(
                                 &format!("Permission for {} team:", team.name),
                                 vec!["pull", "triage", "push", "admin"],
