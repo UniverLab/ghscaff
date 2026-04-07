@@ -82,7 +82,7 @@ fn collect_team_access(client: &GithubClient, _org: &str) -> Result<Vec<teams::T
 
     let team_names: Vec<String> = org_teams
         .iter()
-        .map(|t| format!("{} ({})", t.name, t.slug))
+        .map(|t| t.name.clone())
         .collect();
 
     let selected_teams = MultiSelect::new("Select teams to add:", team_names)
@@ -99,7 +99,7 @@ fn collect_team_access(client: &GithubClient, _org: &str) -> Result<Vec<teams::T
     for selected_team_display in selected_teams {
         let team = org_teams
             .iter()
-            .find(|t| format!("{} ({})", t.name, t.slug) == selected_team_display)
+            .find(|t| t.name == selected_team_display)
             .unwrap();
 
         let permission = Select::new(
