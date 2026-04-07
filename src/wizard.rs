@@ -4,7 +4,7 @@ use inquire::{Confirm, MultiSelect, Password, Select, Text};
 use crate::github::{
     branches,
     client::{token_from_env, GithubClient},
-    contents, labels, repo, secrets,
+    contents, labels, repo, secrets, teams,
 };
 use crate::templates;
 
@@ -35,6 +35,7 @@ pub struct WizardConfig {
     pub create_develop: bool,
     pub license: Option<String>,
     pub create_labels: bool,
+    pub team_access: Vec<teams::TeamAccess>,
 }
 
 pub fn run(dry_run: bool) -> Result<()> {
@@ -63,6 +64,57 @@ pub fn run(dry_run: bool) -> Result<()> {
     }
 
     execute(&client, &config, dry_run, &token)
+}
+
+fn collect_team_access(client: &GithubClient, _org: &str) -> Result<Vec<teams::TeamAccess>> {
+    print!("  Fetching teams... ");
+    let org_teams = teams::list_teams(client).unwrap_or_else(|_| {
+        eprintln!();
+        eprintln!("  ⚠  Could not list teams (token may need 'read:org' scope)");
+        vec![]
+    });
+    println!("ok");
+
+    if org_teams.is_empty() {
+        println!("  ℹ  No teams found in organization");
+        return Ok(vec![]);
+    }
+
+    let team_names: Vec<String> = org_teams
+        .iter()
+        .map(|t| format!("{} ({})", t.name, t.slug))
+        .collect();
+
+    let selected_teams = MultiSelect::new("Select teams to add:", team_names)
+        .with_help_message("space select  enter confirm  (leave empty for no teams)")
+        .prompt_skippable()?
+        .unwrap_or_default();
+
+    if selected_teams.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut team_access = vec![];
+
+    for selected_team_display in selected_teams {
+        let team = org_teams
+            .iter()
+            .find(|t| format!("{} ({})", t.name, t.slug) == selected_team_display)
+            .unwrap();
+
+        let permission = Select::new(
+            &format!("Permission for {} team:", team.name),
+            vec!["pull", "triage", "push", "admin"],
+        )
+        .prompt()?;
+
+        team_access.push(teams::TeamAccess {
+            team_slug: team.slug.clone(),
+            permission: permission.to_string(),
+        });
+    }
+
+    Ok(team_access)
 }
 
 fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig> {
@@ -98,6 +150,13 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         (owner_selection, false)
     } else {
         (owner_selection, true)
+    };
+
+    // Step 2.5 — Team access (only for organizations)
+    let team_access = if is_org {
+        collect_team_access(client, &owner)?
+    } else {
+        vec![]
     };
 
     // Step 3 — Language
@@ -143,6 +202,7 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         create_develop,
         license,
         create_labels: features.contains(&"Standard labels"),
+        team_access,
     })
 }
 
@@ -293,7 +353,21 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
-    // 8. Secrets from template — read from env first, prompt if missing, warn if skipped
+    // 8. Team access
+    for team in &c.team_access {
+        step!(
+            &format!(
+                "add team {} with {} access",
+                team.team_slug, team.permission
+            ),
+            {
+                teams::add_team_to_repo(client, owner, name, &team.team_slug, &team.permission)?;
+                Ok::<(), anyhow::Error>(())
+            }
+        );
+    }
+
+    // 9. Secrets from template — read from env first, prompt if missing, warn if skipped
     for spec in &secret_specs {
         let value = if let Ok(env_val) = std::env::var(&spec.name) {
             println!("  ◆ Secret {}: using value from environment", spec.name);
@@ -347,6 +421,184 @@ fn count_steps(c: &WizardConfig, secrets: &[templates::SecretSpec]) -> usize {
     if !c.topics.is_empty() {
         n += 1;
     }
+    n += c.team_access.len(); // one step per team
     n += secrets.len();
     n
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wizard_config_with_team_access() {
+        let team_access = vec![
+            teams::TeamAccess {
+                team_slug: "backend".to_string(),
+                permission: "push".to_string(),
+            },
+            teams::TeamAccess {
+                team_slug: "devops".to_string(),
+                permission: "pull".to_string(),
+            },
+        ];
+
+        let config = WizardConfig {
+            name: "my-repo".to_string(),
+            description: "Test repo".to_string(),
+            topics: vec!["rust".to_string(), "cli".to_string()],
+            private: false,
+            owner: "my-org".to_string(),
+            is_org: true,
+            language: "rust".to_string(),
+            default_branch: "main".to_string(),
+            create_develop: true,
+            license: Some("MIT".to_string()),
+            create_labels: true,
+            team_access,
+        };
+
+        assert_eq!(config.name, "my-repo");
+        assert_eq!(config.owner, "my-org");
+        assert!(config.is_org);
+        assert_eq!(config.team_access.len(), 2);
+        assert_eq!(config.team_access[0].team_slug, "backend");
+        assert_eq!(config.team_access[1].permission, "pull");
+    }
+
+    #[test]
+    fn test_wizard_config_without_team_access() {
+        let config = WizardConfig {
+            name: "my-repo".to_string(),
+            description: "Test repo".to_string(),
+            topics: vec![],
+            private: true,
+            owner: "my-user".to_string(),
+            is_org: false,
+            language: "rust".to_string(),
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+
+        assert!(!config.is_org);
+        assert!(config.team_access.is_empty());
+    }
+
+    #[test]
+    fn test_count_steps_with_teams() {
+        let team_access = vec![
+            teams::TeamAccess {
+                team_slug: "team1".to_string(),
+                permission: "push".to_string(),
+            },
+            teams::TeamAccess {
+                team_slug: "team2".to_string(),
+                permission: "pull".to_string(),
+            },
+        ];
+
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["test".to_string()],
+            private: false,
+            owner: "org".to_string(),
+            is_org: true,
+            language: "rust".to_string(),
+            default_branch: "main".to_string(),
+            create_develop: true,
+            license: Some("MIT".to_string()),
+            create_labels: true,
+            team_access,
+        };
+
+        // 1: create repo
+        // 2: init commit
+        // 3: create develop
+        // 4: protect develop
+        // 5: protect main
+        // 6: labels
+        // 7: topics
+        // 8-9: 2 teams
+        // Total: 9 (no secrets)
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 9);
+    }
+
+    #[test]
+    fn test_count_steps_without_teams() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: "rust".to_string(),
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+
+        // 1: create repo
+        // 2: init commit
+        // 3: protect main
+        // Total: 3 (no develop, no labels, no topics, no teams, no secrets)
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 3);
+    }
+
+    #[test]
+    fn test_count_steps_all_features() {
+        let team_access = vec![teams::TeamAccess {
+            team_slug: "team".to_string(),
+            permission: "admin".to_string(),
+        }];
+
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["test".to_string()],
+            private: false,
+            owner: "org".to_string(),
+            is_org: true,
+            language: "rust".to_string(),
+            default_branch: "main".to_string(),
+            create_develop: true,
+            license: Some("Apache-2.0".to_string()),
+            create_labels: true,
+            team_access,
+        };
+
+        let secret_specs = vec![
+            templates::SecretSpec {
+                name: "SECRET1".to_string(),
+                description: "Test secret".to_string(),
+                required: true,
+            },
+            templates::SecretSpec {
+                name: "SECRET2".to_string(),
+                description: "Another secret".to_string(),
+                required: false,
+            },
+        ];
+
+        // 1: create repo
+        // 2: init commit
+        // 3: create develop
+        // 4: protect develop
+        // 5: protect main
+        // 6: labels
+        // 7: topics
+        // 8: 1 team
+        // 9-10: 2 secrets
+        // Total: 10
+        let steps = count_steps(&config, &secret_specs);
+        assert_eq!(steps, 10);
+    }
 }
