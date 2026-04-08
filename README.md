@@ -12,6 +12,7 @@
  ░░░░░░                                                                   
 ```
 
+[![Crate](https://img.shields.io/crates/v/ghscaff.svg)](https://crates.io/crates/ghscaff)
 [![CI](https://github.com/UniverLab/ghscaff/actions/workflows/ci.yml/badge.svg)](https://github.com/UniverLab/ghscaff/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
