@@ -20,6 +20,10 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 
 ---
 
+![Demo](assets/demo.gif)
+
+---
+
 ## Features
 
 - **🪄 Interactive wizard** — Create GitHub repos with a conversational guided flow
@@ -135,42 +139,6 @@ Then **automatically**:
 - Syncs labels, topics, and CI/CD workflows
 - Configures required GitHub Actions secrets from `secrets.toml`
 
-```
-  Create a new GitHub repository
-
-  Validating token... ok  (JheisonMB)
-
-  > Repository name: my-rust-cli
-  > Description: A CLI tool built with Rust
-  > Topics: rust, cli, tool
-  > Visibility: Public
-  > Owner: UniverLab
-  Fetching teams... ok
-  > Select teams to add: backend, devops
-  > Permission for backend team: push
-  > Permission for devops team: pull
-  > Language: rust
-  > Default branch: main
-  > Create develop branch? Yes
-  > Features: LICENSE, Standard labels
-  > License: MIT
-
-  Apply these changes? Yes
-
-  Fetching boilerplate template... ok
-  [1/9] create repo UniverLab/my-rust-cli... ok  (https://github.com/UniverLab/my-rust-cli)
-  [2/9] init repository... ok
-  [3/9] create develop branch... ok
-  [4/9] apply branch protection (main)... ok
-  [5/9] apply branch protection (develop)... ok
-  [6/9] sync labels... ok
-  [7/9] set topics... ok
-  [8/9] add team backend with push access... ok
-  [9/9] add team devops with pull access... ok
-
-  Done  —  https://github.com/UniverLab/my-rust-cli
-```
-
 ---
 
 ## Apply Mode
@@ -242,28 +210,9 @@ Each language template includes:
 - **.gitignore** — Language-specific (fetched from GitHub API)
 - **.github/workflows/ci.yml** — CI/CD workflow with basic checks
 - **.github/workflows/release.yml** — Release workflow (published on Git tags)
-- **`CONTRIBUTING.md`** — Developer guide (includes secrets config for maintainers)
 - **LICENSE** — Placeholder (user selects license type during wizard)
 
 All files are merged into a single atomic `chore: init repository` commit.
-
-### v1 — Rust
-
-CI workflow includes:
-- `cargo fmt --check` — code formatting
-- `cargo clippy -- -D warnings` — linting
-- `cargo test` — test suite
-
-Release workflow:
-- Builds and publishes to [crates.io](https://crates.io)
-- Requires `CARGO_REGISTRY_TOKEN` secret (configured during wizard)
-- Default topics: `rust`, `cli`
-
-### v2+ Planned
-
-- Python (poetry, FastAPI examples)
-- Node.js / TypeScript (npm, Next.js examples)
-- Java / Spring Boot
 
 ---
 
@@ -290,89 +239,7 @@ When enabled, applies to the default branch:
 - ✅ Dismiss stale reviews
 - ✅ Disallow force-push
 
----
-
-## Development
-
-### Requirements
-
-- Rust 1.70+
-- Cargo
-
-### Build
-
-```bash
-cargo build --release
-```
-
-### Test
-
-```bash
-cargo test
-```
-
-### Lint
-
-```bash
-cargo fmt --check
-cargo clippy -- -D warnings
-```
-
-### Format
-
-```bash
-cargo fmt
-```
-
----
-
-## Roadmap
-
-### v1 — Rust scaffold + apply mode ✓ COMPLETE
-- [x] Full wizard flow (`new`)
-- [x] `apply` mode for existing repos
-- [x] `--dry-run` in both modes
-- [x] Rust language template
-- [x] Standard labels (6 core labels)
-- [x] Branch protection
-- [x] Single atomic commit (Git Trees API)
-- [x] Template secrets (GitHub Actions API)
-- [x] Self-update detection on startup
-- [ ] Publish to crates.io
-
-### v2 — Multi-language
-- [ ] Python template (poetry/pip)
-- [ ] Node.js/TypeScript template (npm/yarn)
-- [ ] Java/Spring template
-- [ ] `templates.toml` for per-template feature configuration
-
-### v3 — Config & presets
-- [ ] `~/.config/ghscaff/presets.toml` — save wizard configs
-- [ ] `ghscaff --preset my-rust-lib` — skip wizard
-- [ ] `ghscaff clone --preset` — initialize from preset
-
-### v4 — Advanced
-- [ ] Issue templates (`ISSUE_TEMPLATE/`)
-- [ ] Pull request templates (`PULL_REQUEST_TEMPLATE/`)
-- [ ] Organization-level config
-- [ ] Monorepo scaffold support
-
----
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit with conventional commits (`git commit -am 'feat: add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-All code must:
-- Pass `cargo fmt --check`
-- Pass `cargo clippy -- -D warnings`
-- Pass `cargo test`
+--
 
 ### Secrets Configuration
 
@@ -381,8 +248,6 @@ If you're extending `ghscaff` with new templates or modifying the release workfl
 - **`CARGO_REGISTRY_TOKEN`** — Required for publishing Rust crates to crates.io
   - Get your token from [crates.io/me](https://crates.io/me)
   - Add it as a repository secret in GitHub (`Settings > Secrets and variables > Actions`)
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) in each template's boilerplate for maintainer setup instructions.
 
 ---
 
