@@ -108,7 +108,7 @@ jobs:
         if: matrix.archive == 'tar.gz'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../ghscaff-${{ needs.create-tag.outputs.tag }}-${{ matrix.target }}.tar.gz ghscaff
+          tar --create --gzip --file ../../../ghscaff-${{ needs.create-tag.outputs.tag }}-${{ matrix.target }}.tar.gz ghscaff
           cd ../../..
 
       - name: Package (windows)
