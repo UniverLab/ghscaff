@@ -72,18 +72,28 @@ fn save_to_path(data: &VaultData, passphrase: &str, path: &Path) -> Result<()> {
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
     }
 
     let mut blob = Vec::with_capacity(NONCE_LEN + ciphertext.len());
     blob.extend_from_slice(&nonce_bytes);
     blob.extend_from_slice(&ciphertext);
-    std::fs::write(path, &blob)?;
+
+    // Atomic write: write to temp file then rename
+    let tmp_path = path.with_extension("enc.tmp");
+    std::fs::write(&tmp_path, &blob)?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600))?;
     }
+
+    std::fs::rename(&tmp_path, path)?;
 
     Ok(())
 }
