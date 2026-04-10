@@ -3,7 +3,7 @@ use inquire::{Confirm, MultiSelect, Password, Select, Text};
 
 use crate::github::{
     branches,
-    client::{token_from_env, GithubClient},
+    client::{resolve_token, GithubClient},
     contents, labels, repo, secrets, teams,
 };
 use crate::templates;
@@ -43,7 +43,7 @@ pub fn run(dry_run: bool) -> Result<()> {
     println!("  Create a new GitHub repository\n");
 
     // Fail fast — validate token before asking anything
-    let token = token_from_env()?;
+    let (token, passphrase) = resolve_token()?;
     let client = GithubClient::new(&token);
 
     print!("  Validating token... ");
@@ -63,7 +63,7 @@ pub fn run(dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    execute(&client, &config, dry_run, &token)
+    execute(&client, &config, dry_run, &token, &passphrase)
 }
 
 fn collect_team_access(client: &GithubClient, _org: &str) -> Result<Vec<teams::TeamAccess>> {
@@ -203,7 +203,13 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
     })
 }
 
-fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) -> Result<()> {
+fn execute(
+    client: &GithubClient,
+    c: &WizardConfig,
+    dry_run: bool,
+    token: &str,
+    passphrase: &str,
+) -> Result<()> {
     println!();
 
     // Always download fresh template for `new` so cache is never stale
@@ -350,6 +356,11 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
                     labels::create_label(client, owner, name, label)?;
                 }
             }
+            for existing_label in &existing {
+                if !standard.iter().any(|s| s.name == existing_label.name) {
+                    let _ = labels::delete_label(client, owner, name, &existing_label.name);
+                }
+            }
             Ok::<(), anyhow::Error>(())
         });
     }
@@ -376,24 +387,35 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         );
     }
 
-    // 9. Secrets from template — read from env first, prompt if missing, warn if skipped
+    // 9. Template secrets: env → vault → prompt
     for spec in &secret_specs {
-        let value = if let Ok(env_val) = std::env::var(&spec.name) {
-            println!("  ◆ Secret {}: using value from environment", spec.name);
-            Some(env_val)
+        let value = if let Some(val) = crate::vault::resolve_secret(&spec.name, passphrase)? {
+            println!("  ◆ Secret {}: found", spec.name);
+            Some(val)
         } else {
             let ans = Password::new(&format!("Secret {} (enter to skip):", spec.name))
                 .with_help_message(&spec.description)
                 .without_confirmation()
                 .prompt_skippable()?;
-            if ans.as_deref().map(str::is_empty).unwrap_or(true) {
-                println!(
-                    "  ⚠ Secret {} not configured — set ${} and re-run `ghscaff apply`",
-                    spec.name, spec.name
-                );
-                None
-            } else {
-                ans
+            match ans.as_deref() {
+                Some(v) if !v.is_empty() => {
+                    let save_it = Confirm::new("  Save this secret in the vault for future use?")
+                        .with_default(true)
+                        .prompt()
+                        .unwrap_or(false);
+                    if save_it {
+                        crate::vault::save_secret(&spec.name, v, passphrase)?;
+                        println!("  \x1b[32m✓\x1b[0m Secret saved to vault");
+                    }
+                    Some(v.to_string())
+                }
+                _ => {
+                    println!(
+                        "  ⚠ Secret {} not configured — re-run `ghscaff apply` to set it later",
+                        spec.name
+                    );
+                    None
+                }
             }
         };
         if let Some(val) = value {

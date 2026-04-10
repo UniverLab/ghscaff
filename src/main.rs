@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 mod apply;
 mod github;
 mod templates;
+mod vault;
 mod wizard;
 
 #[derive(Parser)]
@@ -35,6 +36,8 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Reconfigure ghscaff credentials (wipes vault and starts fresh)
+    Config,
 }
 
 fn main() -> Result<()> {
@@ -43,7 +46,48 @@ fn main() -> Result<()> {
     match cli.command {
         None | Some(Command::New { .. }) => wizard::run(cli.dry_run),
         Some(Command::Apply { repo, dry_run }) => apply::run_apply(repo.as_deref(), dry_run),
+        Some(Command::Config) => run_config(),
     }
+}
+
+fn run_config() -> Result<()> {
+    println!();
+    println!(
+        "  \x1b[33m⚠  This will delete ALL stored credentials and secrets from the vault.\x1b[0m"
+    );
+    println!("  \x1b[33m   This action cannot be undone.\x1b[0m");
+    println!();
+
+    let confirmed = inquire::Confirm::new("Continue with reconfiguration?")
+        .with_default(false)
+        .prompt()?;
+
+    if !confirmed {
+        println!("  Aborted.");
+        return Ok(());
+    }
+
+    if vault::destroy()? {
+        println!("  \x1b[32m✓\x1b[0m Vault deleted");
+    } else {
+        println!("  ℹ  No vault found");
+    }
+
+    println!();
+    let (token, _) = vault::prompt_and_save_github_token()?;
+
+    // Validate
+    let client = github::client::GithubClient::new(&token);
+    print!("  Validating token... ");
+    let user = github::repo::get_user(&client)?;
+    println!("ok  ({})", user.login);
+
+    println!();
+    println!(
+        "  \x1b[32m✓\x1b[0m ghscaff reconfigured. Template secrets will be requested on next run."
+    );
+    println!();
+    Ok(())
 }
 
 fn check_for_update() {
