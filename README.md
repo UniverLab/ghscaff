@@ -12,9 +12,12 @@
  ░░░░░░                                                                   
 ```
 
-[![Crate](https://img.shields.io/crates/v/ghscaff.svg)](https://crates.io/crates/ghscaff)
-[![CI](https://github.com/UniverLab/ghscaff/actions/workflows/ci.yml/badge.svg)](https://github.com/UniverLab/ghscaff/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/UniverLab/ghscaff/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/UniverLab/ghscaff/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI"/></a>
+  <a href="https://crates.io/crates/ghscaff"><img src="https://img.shields.io/crates/v/ghscaff?style=for-the-badge&logo=rust&logoColor=white" alt="Crates.io"/></a>
+  <img src="https://img.shields.io/badge/Status-Active-27AE60?style=for-the-badge" alt="Status"/>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2E8B57?style=for-the-badge" alt="License"/></a>
+</p>
 
 Interactive CLI wizard for creating and configuring GitHub repositories. One binary, zero runtime dependencies.
 
@@ -254,14 +257,6 @@ If you're extending `ghscaff` with new templates or modifying the release workfl
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
-
----
-
-## Support
-
-- 📖 [GitHub Issues](https://github.com/UniverLab/ghscaff/issues) — Report bugs or request features
-- 💬 [Discussions](https://github.com/UniverLab/ghscaff/discussions) — Ask questions
-- 🐦 Twitter: [@JheisonMB](https://twitter.com/JheisonMB)
 
 ---
 
