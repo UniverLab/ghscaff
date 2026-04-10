@@ -57,7 +57,7 @@ pub fn apply_branch_protection(
         required_status_checks: RequiredChecks<'a>,
         enforce_admins: bool,
         required_pull_request_reviews: Reviews,
-        restrictions: Option<()>,
+        restrictions: Restrictions,
         allow_force_pushes: bool,
     }
     #[derive(Serialize)]
@@ -70,6 +70,12 @@ pub fn apply_branch_protection(
         dismiss_stale_reviews: bool,
         required_approving_review_count: u8,
     }
+    #[derive(Serialize)]
+    struct Restrictions {
+        users: Vec<String>,
+        teams: Vec<String>,
+        apps: Vec<String>,
+    }
 
     let body = Body {
         required_status_checks: RequiredChecks {
@@ -81,7 +87,11 @@ pub fn apply_branch_protection(
             dismiss_stale_reviews: true,
             required_approving_review_count: 1,
         },
-        restrictions: None,
+        restrictions: Restrictions {
+            users: vec![],
+            teams: vec![],
+            apps: vec![],
+        },
         allow_force_pushes: false,
     };
     let _: serde_json::Value = client.put(
