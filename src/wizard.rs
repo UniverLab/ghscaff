@@ -429,13 +429,75 @@ fn execute(
     }
 
     println!();
-    if let Some(r) = created_repo {
+    if let Some(r) = &created_repo {
         println!("  Done  —  {}", r.html_url);
     } else {
         println!("  Done  (dry-run)");
     }
     println!();
+
+    if !dry_run {
+        if let Some(r) = &created_repo {
+            offer_gitkit_clone(&r.html_url);
+        }
+    }
+
     Ok(())
+}
+
+fn offer_gitkit_clone(repo_url: &str) {
+    let Ok(want_clone) = Confirm::new("Clone the repository with gitkit?")
+        .with_default(true)
+        .prompt()
+    else {
+        return;
+    };
+    if !want_clone {
+        return;
+    }
+
+    if !is_command_available("gitkit") {
+        println!("  gitkit not found. Installing...\n");
+        install_gitkit();
+        if !is_command_available("gitkit") {
+            println!("  ⚠ gitkit installation failed — clone manually with:");
+            println!("    gitkit clone {repo_url}");
+            return;
+        }
+    }
+
+    let _ = std::process::Command::new("gitkit")
+        .args(["clone", repo_url])
+        .status();
+}
+
+fn is_command_available(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn install_gitkit() {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "curl -fsSL https://raw.githubusercontent.com/UniverLab/gitkit/main/scripts/install.sh | sh",
+            ])
+            .status();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("powershell")
+            .args([
+                "-Command",
+                "irm https://raw.githubusercontent.com/UniverLab/gitkit/main/scripts/install.ps1 | iex",
+            ])
+            .status();
+    }
 }
 
 fn count_steps(c: &WizardConfig, secrets: &[templates::SecretSpec]) -> usize {
