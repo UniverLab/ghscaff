@@ -30,7 +30,7 @@ pub struct WizardConfig {
     pub private: bool,
     pub owner: String,
     pub is_org: bool,
-    pub language: String,
+    pub language: Option<String>,
     pub default_branch: String,
     pub create_develop: bool,
     pub license: Option<String>,
@@ -157,10 +157,16 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
     };
 
     // Step 3 — Language
-    let language = Select::new("Language:", templates::AVAILABLE.to_vec())
-        .with_help_message("Drives .gitignore, CI workflow, and boilerplate")
-        .prompt()?
-        .to_string();
+    let mut lang_options: Vec<&str> = templates::AVAILABLE.to_vec();
+    lang_options.push("none");
+    let lang_choice = Select::new("Template:", lang_options)
+        .with_help_message("Drives .gitignore, CI workflow, and boilerplate. 'none' = empty repo")
+        .prompt()?;
+    let language = if lang_choice == "none" {
+        None
+    } else {
+        Some(lang_choice.to_string())
+    };
 
     // Step 4 — Branches
     let default_branch = Text::new("Default branch:").with_default("main").prompt()?;
@@ -212,11 +218,20 @@ fn execute(
 ) -> Result<()> {
     println!();
 
-    // Always download fresh template for `new` so cache is never stale
-    print!("  Fetching boilerplate template... ");
-    let tmpl = templates::resolve(&c.language, token, true)?;
-    println!("ok");
-    let secret_specs = templates::load_secrets(&c.language);
+    // Fetch template if selected
+    let tmpl = if let Some(lang) = &c.language {
+        print!("  Fetching boilerplate template... ");
+        let t = templates::resolve(lang, token, true)?;
+        println!("ok");
+        Some(t)
+    } else {
+        None
+    };
+    let secret_specs = c
+        .language
+        .as_deref()
+        .map(templates::load_secrets)
+        .unwrap_or_default();
     let total = count_steps(c, &secret_specs);
     let mut step = 0usize;
 
@@ -267,20 +282,20 @@ fn execute(
     // 2. Collect all boilerplate files for a single init commit
     let mut init_files: Vec<contents::TreeFile> = vec![];
 
-    // Template files (boilerplate — all files including ci.yml, release.yml, etc.)
-    for f in tmpl.boilerplate_files(name, &c.description, owner) {
+    if let Some(tmpl) = &tmpl {
+        for f in tmpl.boilerplate_files(name, &c.description, owner) {
+            init_files.push(contents::TreeFile {
+                path: f.path,
+                content: f.content,
+            });
+        }
+
+        let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
         init_files.push(contents::TreeFile {
-            path: f.path,
-            content: f.content,
+            path: ".gitignore".into(),
+            content: gitignore,
         });
     }
-
-    // .gitignore — fetched fresh from GitHub's gitignore API
-    let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
-    init_files.push(contents::TreeFile {
-        path: ".gitignore".into(),
-        content: gitignore,
-    });
 
     // LICENSE (placeholder — user replaces it or CI generates it)
     if let Some(lic) = &c.license {
@@ -294,23 +309,28 @@ fn execute(
         });
     }
 
-    // 3. Single init commit with all files
+    // 3. Single init commit with all files (skip if empty repo with no LICENSE)
     let mut init_sha = String::new();
-    step!("init repository", {
-        let sha = contents::create_tree_commit(
-            client,
-            owner,
-            name,
-            &init_files,
-            "chore: init repository",
-            &c.default_branch,
-        )?;
-        init_sha = sha;
-        Ok::<(), anyhow::Error>(())
-    });
+    if !init_files.is_empty() {
+        step!("init repository", {
+            let sha = contents::create_tree_commit(
+                client,
+                owner,
+                name,
+                &init_files,
+                "chore: init repository",
+                &c.default_branch,
+            )?;
+            init_sha = sha;
+            Ok::<(), anyhow::Error>(())
+        });
+    }
 
     // 4. develop branch
     if c.create_develop {
+        if init_sha.is_empty() {
+            init_sha = branches::get_branch_sha(client, owner, name, &c.default_branch)?;
+        }
         step!("create develop branch", {
             branches::create_branch(client, owner, name, "develop", &init_sha)?;
             Ok::<(), anyhow::Error>(())
@@ -502,19 +522,22 @@ fn install_gitkit() {
 
 fn count_steps(c: &WizardConfig, secrets: &[templates::SecretSpec]) -> usize {
     let mut n = 1; // create repo
-    n += 1; // init commit (all boilerplate files in one shot)
+    let has_files = c.language.is_some() || c.license.is_some();
+    if has_files {
+        n += 1; // init commit
+    }
     if c.create_develop {
-        n += 1; // create develop
+        n += 1;
         n += 1; // protect develop
     }
-    n += 1; // protect main (always)
+    n += 1; // protect main
     if c.create_labels {
         n += 1;
     }
     if !c.topics.is_empty() {
         n += 1;
     }
-    n += c.team_access.len(); // one step per team
+    n += c.team_access.len();
     n += secrets.len();
     n
 }
@@ -543,7 +566,7 @@ mod tests {
             private: false,
             owner: "my-org".to_string(),
             is_org: true,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: true,
             license: Some("MIT".to_string()),
@@ -568,7 +591,7 @@ mod tests {
             private: true,
             owner: "my-user".to_string(),
             is_org: false,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: false,
             license: None,
@@ -600,7 +623,7 @@ mod tests {
             private: false,
             owner: "org".to_string(),
             is_org: true,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: true,
             license: Some("MIT".to_string()),
@@ -630,7 +653,7 @@ mod tests {
             private: false,
             owner: "user".to_string(),
             is_org: false,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: false,
             license: None,
@@ -660,7 +683,7 @@ mod tests {
             private: false,
             owner: "org".to_string(),
             is_org: true,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: true,
             license: Some("Apache-2.0".to_string()),
