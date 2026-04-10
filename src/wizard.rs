@@ -337,29 +337,21 @@ fn execute(
         });
     }
 
-    // 5. Branch protection — always applied to main (and develop if created)
+    // 5. Branch protection
+    let ci_check = c
+        .language
+        .as_deref()
+        .map(|_| "rust-ci / Format, Lint & Test");
     step!(
         &format!("apply branch protection ({})", c.default_branch),
         {
-            branches::apply_branch_protection(
-                client,
-                owner,
-                name,
-                &c.default_branch,
-                "rust-ci / Format, Lint & Test",
-            )?;
+            branches::apply_branch_protection(client, owner, name, &c.default_branch, ci_check)?;
             Ok::<(), anyhow::Error>(())
         }
     );
     if c.create_develop {
         step!("apply branch protection (develop)", {
-            branches::apply_branch_protection(
-                client,
-                owner,
-                name,
-                "develop",
-                "rust-ci / Format, Lint & Test",
-            )?;
+            branches::apply_branch_protection(client, owner, name, "develop", ci_check)?;
             Ok::<(), anyhow::Error>(())
         });
     }

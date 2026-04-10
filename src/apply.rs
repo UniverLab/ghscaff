@@ -345,7 +345,7 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
         &owner,
         &repo_name,
         "main",
-        "rust-ci / Format, Lint & Test",
+        Some("rust-ci / Format, Lint & Test"),
     ) {
         Ok(()) => println!("  ✓ Branch protection applied"),
         Err(e) => {
