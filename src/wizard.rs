@@ -457,15 +457,15 @@ fn execute(
     println!();
 
     if !dry_run {
-        if let Some(r) = &created_repo {
-            offer_gitkit_clone(&r.html_url);
+        if let Some(_r) = &created_repo {
+            offer_gitkit_clone(owner, name);
         }
     }
 
     Ok(())
 }
 
-fn offer_gitkit_clone(repo_url: &str) {
+fn offer_gitkit_clone(owner: &str, repo: &str) {
     let Ok(want_clone) = Confirm::new("Clone the repository with gitkit?")
         .with_default(true)
         .prompt()
@@ -476,18 +476,27 @@ fn offer_gitkit_clone(repo_url: &str) {
         return;
     }
 
+    let protocol = Select::new("Clone via:", vec!["SSH", "HTTPS"])
+        .prompt()
+        .unwrap_or("HTTPS");
+
+    let clone_url = match protocol {
+        "SSH" => format!("git@github.com:{owner}/{repo}.git"),
+        _ => format!("https://github.com/{owner}/{repo}.git"),
+    };
+
     if !is_command_available("gitkit") {
         println!("  gitkit not found. Installing...\n");
         install_gitkit();
         if !is_command_available("gitkit") {
             println!("  ⚠ gitkit installation failed — clone manually with:");
-            println!("    gitkit clone {repo_url}");
+            println!("    gitkit clone {clone_url}");
             return;
         }
     }
 
     let _ = std::process::Command::new("gitkit")
-        .args(["clone", repo_url])
+        .args(["clone", &clone_url])
         .status();
 }
 
