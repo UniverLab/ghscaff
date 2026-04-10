@@ -315,13 +315,25 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
     step!(
         &format!("apply branch protection ({})", c.default_branch),
         {
-            branches::apply_branch_protection(client, owner, name, &c.default_branch, "build")?;
+            branches::apply_branch_protection(
+                client,
+                owner,
+                name,
+                &c.default_branch,
+                "rust-ci / Format, Lint & Test",
+            )?;
             Ok::<(), anyhow::Error>(())
         }
     );
     if c.create_develop {
         step!("apply branch protection (develop)", {
-            branches::apply_branch_protection(client, owner, name, "develop", "build")?;
+            branches::apply_branch_protection(
+                client,
+                owner,
+                name,
+                "develop",
+                "rust-ci / Format, Lint & Test",
+            )?;
             Ok::<(), anyhow::Error>(())
         });
     }

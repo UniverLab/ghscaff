@@ -326,26 +326,26 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     sync_labels(&client, &owner, &repo_name, false)?;
     println!("  ✓ Labels synced");
 
-    // 2. Branch protection (skip if already enabled, warn on failure)
-    if !ctx.branch_protection_enabled {
-        match crate::github::branches::apply_branch_protection(
-            &client, &owner, &repo_name, "main", "CI",
-        ) {
-            Ok(()) => println!("  ✓ Branch protection applied"),
-            Err(e) => {
-                let msg = format!("{e:#}");
-                if msg.contains("403") {
-                    println!("  ⚠ Branch protection skipped (403 Forbidden)");
-                    println!("    Possible causes:");
-                    println!("    • Private repo on a free org plan (requires GitHub Team)");
-                    println!("    • Token not authorized for this organization");
-                } else {
-                    println!("  ⚠ Branch protection failed: {msg}");
-                }
+    // 2. Branch protection (always apply to ensure correct config)
+    match crate::github::branches::apply_branch_protection(
+        &client,
+        &owner,
+        &repo_name,
+        "main",
+        "rust-ci / Format, Lint & Test",
+    ) {
+        Ok(()) => println!("  ✓ Branch protection applied"),
+        Err(e) => {
+            let msg = format!("{e:#}");
+            if msg.contains("403") {
+                println!("  ⚠ Branch protection skipped (403 Forbidden)");
+                println!("    Possible causes:");
+                println!("    • Private repo on a free org plan (requires GitHub Team)");
+                println!("    • Token not authorized for this organization");
+            } else {
+                println!("  ⚠ Branch protection failed: {msg}");
             }
         }
-    } else {
-        println!("  ✓ Branch protection (already enabled)");
     }
 
     // 3. Develop branch (if needed)
