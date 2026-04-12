@@ -50,7 +50,7 @@ pub fn apply_branch_protection(
     owner: &str,
     repo: &str,
     branch: &str,
-    ci_check: &str,
+    ci_check: Option<&str>,
 ) -> Result<()> {
     #[derive(Serialize)]
     struct Body<'a> {
@@ -80,7 +80,7 @@ pub fn apply_branch_protection(
     let body = Body {
         required_status_checks: RequiredChecks {
             strict: true,
-            contexts: vec![ci_check],
+            contexts: ci_check.into_iter().collect(),
         },
         enforce_admins: false,
         required_pull_request_reviews: Reviews {

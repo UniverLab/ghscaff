@@ -31,13 +31,13 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 
 - **🪄 Interactive wizard** — Create GitHub repos with a conversational guided flow
 - **⚡ Zero dependencies** — Single binary, no runtime requirements
+- **🔒 Encrypted vault** — Tokens stored locally with XSalsa20-Poly1305, never in env vars or plain text
 - **🔄 Idempotent apply mode** — Configure existing repos without recreation
 - **👥 Team access control** — Assign repositories to organization teams with custom permissions (read, triage, write, admin)
-- **🏷️ Smart labels** — Auto-create 6 core issue labels
+- **🏷️ Enforced labels** — 7 standard labels synced on every run (non-standard labels are removed)
 - **🛡️ Branch protection** — Enforce reviews, status checks, and workflow validation
 - **🚀 Language templates** — Rust (v1), Python/Node.js/Java coming soon
 - **📝 Boilerplate files** — README, Cargo.toml, CI/CD workflows, LICENSE
-- **🔐 Token validation** — Fail-fast authentication checks
 - **🔑 Template secrets** — Automatically configures required GitHub Actions secrets per template
 - **⬆️ Self-update** — Detects new releases on startup and offers one-command upgrade
 
@@ -96,7 +96,7 @@ Check the [Releases](https://github.com/UniverLab/ghscaff/releases) page for pre
 
 ```bash
 rm -f ~/.local/bin/ghscaff         # ghscaff binary
-rm -rf ~/.ghscaff/                 # boilerplate cache
+rm -rf ~/.ghscaff/                 # boilerplate cache + encrypted vault
 ```
 
 ---
@@ -104,10 +104,8 @@ rm -rf ~/.ghscaff/                 # boilerplate cache
 ## Quick Start
 
 ```bash
-# Set your GitHub token
-export GITHUB_TOKEN=ghp_xxxxxxxxxxxx
-
 # Interactive wizard — create a new repo
+# (token is requested on first run and stored in the encrypted vault)
 ghscaff
 
 # Or directly with a subcommand
@@ -118,7 +116,49 @@ ghscaff apply owner/repo
 
 # Preview changes without API calls
 ghscaff --dry-run
+
+# Reconfigure credentials
+ghscaff config
 ```
+
+---
+
+## Authentication
+
+ghscaff resolves the GitHub token in this order:
+
+1. **`GITHUB_TOKEN` env var** — for CI/CD and backward compatibility
+2. **Encrypted vault** (`~/.ghscaff/vault.enc`) — for secure local usage
+3. **Interactive prompt** — on first run, asks for the token and saves it to the vault
+
+### Encrypted Vault
+
+Tokens are encrypted with **XSalsa20-Poly1305** and a key derived from:
+
+| Factor | Purpose |
+|--------|---------|
+| Username | Only your OS user can decrypt |
+| Hostname | Copying the vault to another machine won't work |
+| Binary path | Other programs can't derive the same key |
+| Passphrase (optional) | Extra protection if desired |
+
+The vault file (`~/.ghscaff/vault.enc`) has `0600` permissions and the directory has `0700`. Writes are atomic (temp file + rename) to prevent corruption.
+
+### Reconfiguring
+
+```bash
+ghscaff config
+```
+
+This wipes the vault (with confirmation) and starts fresh — new token, optional passphrase. Template secrets will be requested on the next run.
+
+### Required token scopes
+
+- `repo` — Repository access
+- `workflow` — GitHub Actions access
+- `read:org` — (Optional) Organization and team access
+
+**Note on team access:** If your token lacks the `read:org` scope, the wizard will skip the team selection step with a warning, but the rest of the repository setup will continue normally.
 
 ---
 
@@ -139,8 +179,8 @@ Then **automatically**:
 - Commits all boilerplate files in a single atomic commit (`chore: init repository`)
 - Applies branch protection to main (and develop if created)
 - Adds selected teams with their assigned permissions
-- Syncs labels, topics, and CI/CD workflows
-- Configures required GitHub Actions secrets from `secrets.toml`
+- Enforces standard labels (creates missing, updates changed, removes non-standard)
+- Configures required GitHub Actions secrets (from vault, env, or interactive prompt)
 
 ---
 
@@ -158,10 +198,10 @@ ghscaff apply
 
 Applies:
 - ✅ Atomic single commit with all boilerplate files (no individual file commits)
-- ✅ Labels (creates missing, updates existing)
+- ✅ Labels enforced (creates missing, updates changed, **removes non-standard**)
 - ✅ Branch protection on `main` and `develop` (if created)
 - ✅ Topics (merges with existing)
-- ✅ GitHub Actions secrets (from template's `secrets.toml`)
+- ✅ GitHub Actions secrets (from vault, env, or interactive prompt)
 - ✅ CI/CD workflows (included in boilerplate)
 - ✅ `develop` branch (creates if absent)
 
@@ -182,28 +222,6 @@ ghscaff apply owner/repo --dry-run
 
 ---
 
-## Authentication
-
-`ghscaff` reads the GitHub token exclusively from the `GITHUB_TOKEN` environment variable:
-
-```bash
-export GITHUB_TOKEN=ghp_xxxxxxxxxxxx
-ghscaff
-```
-
-**Required token scopes:**
-- `repo` — Repository access
-- `workflow` — GitHub Actions access
-- `read:org` — (Optional, for team access feature) Organization and team access
-
-If the token is missing or invalid, ghscaff fails immediately with a clear error message before prompting anything else.
-
-**Note on team access:** If your token lacks the `read:org` scope, the wizard will skip the team selection step with a warning, but the rest of the repository setup will continue normally.
-
-**Security note:** Never hardcode tokens. Use environment variables or secret managers.
-
----
-
 ## Boilerplate Templates
 
 Each language template includes:
@@ -221,7 +239,7 @@ All files are merged into a single atomic `chore: init repository` commit.
 
 ## Standard Label Set
 
-6 core labels are auto-created with every new repo:
+7 labels are enforced on every repo. Non-standard labels are removed.
 
 | Label | Color | Description |
 |-------|-------|-------------|
@@ -229,7 +247,8 @@ All files are merged into a single atomic `chore: init repository` commit.
 | `feature` | `#a2eeef` | New feature or request |
 | `documentation` | `#0075ca` | Improvements to docs |
 | `breaking-change` | `#e4e669` | Introduces breaking changes |
-| `good first issue` | `#7057ff` | Good for newcomers |
+| `target:main` | `#1d76db` | Targets the main branch |
+| `target:develop` | `#0e8a16` | Targets the develop branch |
 | `help wanted` | `#008672` | Extra attention needed |
 
 ---
@@ -242,15 +261,18 @@ When enabled, applies to the default branch:
 - ✅ Dismiss stale reviews
 - ✅ Disallow force-push
 
---
+---
 
 ### Secrets Configuration
 
-If you're extending `ghscaff` with new templates or modifying the release workflow, you may need to set up GitHub Actions secrets for your development fork:
+Templates can declare required secrets in `secrets.toml`. ghscaff resolves them in order:
 
-- **`CARGO_REGISTRY_TOKEN`** — Required for publishing Rust crates to crates.io
-  - Get your token from [crates.io/me](https://crates.io/me)
-  - Add it as a repository secret in GitHub (`Settings > Secrets and variables > Actions`)
+1. **Encrypted vault** — previously saved secrets
+2. **Environment variable** — e.g. `CARGO_REGISTRY_TOKEN`
+3. **Interactive prompt** — with option to save to vault for future use
+
+For the Rust template:
+- **`CARGO_REGISTRY_TOKEN`** — Required for publishing to crates.io ([get one here](https://crates.io/me))
 
 ---
 
