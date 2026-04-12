@@ -149,24 +149,32 @@ pub fn sync_labels(
     let mut created = 0;
     let mut updated = 0;
     let mut up_to_date = 0;
+    let mut deleted = 0;
 
-    for std_label in standard {
+    for std_label in &standard {
         if let Some(existing) = current.iter().find(|l| l.name == std_label.name) {
-            // Check if needs update
             if existing.color != std_label.color || existing.description != std_label.description {
                 if !dry_run {
-                    labels::update_label(client, owner, repo_name, &std_label.name, &std_label)?;
+                    labels::update_label(client, owner, repo_name, &std_label.name, std_label)?;
                 }
                 updated += 1;
             } else {
                 up_to_date += 1;
             }
         } else {
-            // Create new label
             if !dry_run {
-                labels::create_label(client, owner, repo_name, &std_label)?;
+                labels::create_label(client, owner, repo_name, std_label)?;
             }
             created += 1;
+        }
+    }
+
+    for existing in &current {
+        if !standard.iter().any(|s| s.name == existing.name) {
+            if !dry_run {
+                let _ = labels::delete_label(client, owner, repo_name, &existing.name);
+            }
+            deleted += 1;
         }
     }
 
@@ -174,6 +182,7 @@ pub fn sync_labels(
         created,
         updated,
         up_to_date,
+        deleted,
     })
 }
 
@@ -208,12 +217,13 @@ pub struct SyncResult {
     pub created: usize,
     pub updated: usize,
     pub up_to_date: usize,
+    pub deleted: usize,
 }
 
 /// Main apply mode orchestrator
 pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     // Get token
-    let token = crate::github::client::token_from_env()?;
+    let (token, passphrase) = crate::github::client::resolve_token()?;
     let client = crate::github::client::GithubClient::new(&token);
 
     // Determine repo
@@ -231,10 +241,13 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     println!("  Summary of changes:");
     println!("  ◆ Labels: checking...");
     let label_result = sync_labels(&client, &owner, &repo_name, true)?; // dry check
-    if label_result.created > 0 || label_result.updated > 0 {
+    if label_result.created > 0 || label_result.updated > 0 || label_result.deleted > 0 {
         println!(
-            "    • {} to create, {} to update, {} up to date",
-            label_result.created, label_result.updated, label_result.up_to_date
+            "    • {} to create, {} to update, {} to delete, {} up to date",
+            label_result.created,
+            label_result.updated,
+            label_result.deleted,
+            label_result.up_to_date
         );
     } else {
         println!("    • all up to date");
@@ -332,7 +345,7 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
         &owner,
         &repo_name,
         "main",
-        "rust-ci / Format, Lint & Test",
+        Some("rust-ci / Format, Lint & Test"),
     ) {
         Ok(()) => println!("  ✓ Branch protection applied"),
         Err(e) => {
@@ -412,10 +425,13 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
             }
             println!();
             for spec in missing {
-                if let Ok(env_val) = std::env::var(&spec.name) {
-                    match secrets::set_secret(&client, &owner, &repo_name, &spec.name, &env_val) {
+                if let Some(val) = crate::vault::resolve_secret(&spec.name, &passphrase)? {
+                    match secrets::set_secret(&client, &owner, &repo_name, &spec.name, &val) {
                         Ok(()) => {
-                            println!("  ✓ Secret {} configured (from environment)", spec.name)
+                            println!(
+                                "  ✓ Secret {} configured (from vault/environment)",
+                                spec.name
+                            )
                         }
                         Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
                     }
@@ -427,14 +443,29 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
                             .prompt_skippable()?;
                     match ans.as_deref() {
                         Some(v) if !v.is_empty() => {
+                            let save_it = inquire::Confirm::new(
+                                "  Save this secret in the vault for future use?",
+                            )
+                            .with_default(true)
+                            .prompt()
+                            .unwrap_or(false);
+                            if save_it {
+                                if let Err(e) =
+                                    crate::vault::save_secret(&spec.name, v, &passphrase)
+                                {
+                                    println!("  ⚠ Could not save to vault: {e}");
+                                } else {
+                                    println!("  \x1b[32m✓\x1b[0m Secret saved to vault");
+                                }
+                            }
                             match secrets::set_secret(&client, &owner, &repo_name, &spec.name, v) {
                                 Ok(()) => println!("  ✓ Secret {} configured", spec.name),
                                 Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
                             }
                         }
                         _ => println!(
-                            "  ⚠ Secret {} skipped — set ${} and re-run `ghscaff apply`",
-                            spec.name, spec.name
+                            "  ⚠ Secret {} skipped — re-run `ghscaff apply` to set it later",
+                            spec.name
                         ),
                     }
                 }
@@ -544,9 +575,11 @@ mod tests {
             created: 2,
             updated: 1,
             up_to_date: 9,
+            deleted: 3,
         };
         assert_eq!(result.created, 2);
         assert_eq!(result.updated, 1);
         assert_eq!(result.up_to_date, 9);
+        assert_eq!(result.deleted, 3);
     }
 }

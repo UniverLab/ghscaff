@@ -102,11 +102,19 @@ pub fn create_tree_commit(
     branch: &str,
 ) -> Result<String> {
     // GitHub initializes the git database asynchronously after repo creation.
-    // Wait until the default branch ref is reachable before proceeding.
+    // The ref may exist before the Git Database API is ready, so we verify
+    // by attempting a lightweight API call that requires the git DB.
     const READY_DELAYS_MS: &[u64] = &[1000, 2000, 3000, 5000, 8000];
     for &delay_ms in READY_DELAYS_MS {
         if get_branch_sha_opt(client, owner, repo, branch).is_some() {
-            break;
+            // Verify git DB is actually ready by checking the commit is fetchable
+            let sha = get_branch_sha_opt(client, owner, repo, branch).unwrap();
+            if client
+                .get::<serde_json::Value>(&format!("/repos/{owner}/{repo}/git/commits/{sha}"))
+                .is_ok()
+            {
+                break;
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(delay_ms));
     }

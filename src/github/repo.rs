@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::client::GithubClient;
@@ -52,11 +52,14 @@ pub fn create_repo(
         private,
         auto_init: true,
     };
-    if is_org {
-        client.post(&format!("/orgs/{owner}/repos"), &body)
+    let path = if is_org {
+        format!("/orgs/{owner}/repos")
     } else {
-        client.post("/user/repos", &body)
-    }
+        "/user/repos".to_string()
+    };
+    client
+        .post(&path, &body)
+        .with_context(|| format!("Failed to create repo '{owner}/{name}' — does it already exist?"))
 }
 
 pub fn get_gitignore_template(client: &GithubClient, name: &str) -> Result<String> {

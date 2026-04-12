@@ -3,7 +3,7 @@ use inquire::{Confirm, MultiSelect, Password, Select, Text};
 
 use crate::github::{
     branches,
-    client::{token_from_env, GithubClient},
+    client::{resolve_token, GithubClient},
     contents, labels, repo, secrets, teams,
 };
 use crate::templates;
@@ -30,7 +30,7 @@ pub struct WizardConfig {
     pub private: bool,
     pub owner: String,
     pub is_org: bool,
-    pub language: String,
+    pub language: Option<String>,
     pub default_branch: String,
     pub create_develop: bool,
     pub license: Option<String>,
@@ -43,7 +43,7 @@ pub fn run(dry_run: bool) -> Result<()> {
     println!("  Create a new GitHub repository\n");
 
     // Fail fast — validate token before asking anything
-    let token = token_from_env()?;
+    let (token, passphrase) = resolve_token()?;
     let client = GithubClient::new(&token);
 
     print!("  Validating token... ");
@@ -63,7 +63,7 @@ pub fn run(dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    execute(&client, &config, dry_run, &token)
+    execute(&client, &config, dry_run, &token, &passphrase)
 }
 
 fn collect_team_access(client: &GithubClient, _org: &str) -> Result<Vec<teams::TeamAccess>> {
@@ -157,10 +157,16 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
     };
 
     // Step 3 — Language
-    let language = Select::new("Language:", templates::AVAILABLE.to_vec())
-        .with_help_message("Drives .gitignore, CI workflow, and boilerplate")
-        .prompt()?
-        .to_string();
+    let mut lang_options: Vec<&str> = templates::AVAILABLE.to_vec();
+    lang_options.push("none");
+    let lang_choice = Select::new("Template:", lang_options)
+        .with_help_message("Drives .gitignore, CI workflow, and boilerplate. 'none' = empty repo")
+        .prompt()?;
+    let language = if lang_choice == "none" {
+        None
+    } else {
+        Some(lang_choice.to_string())
+    };
 
     // Step 4 — Branches
     let default_branch = Text::new("Default branch:").with_default("main").prompt()?;
@@ -203,14 +209,29 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
     })
 }
 
-fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) -> Result<()> {
+fn execute(
+    client: &GithubClient,
+    c: &WizardConfig,
+    dry_run: bool,
+    token: &str,
+    passphrase: &str,
+) -> Result<()> {
     println!();
 
-    // Always download fresh template for `new` so cache is never stale
-    print!("  Fetching boilerplate template... ");
-    let tmpl = templates::resolve(&c.language, token, true)?;
-    println!("ok");
-    let secret_specs = templates::load_secrets(&c.language);
+    // Fetch template if selected
+    let tmpl = if let Some(lang) = &c.language {
+        print!("  Fetching boilerplate template... ");
+        let t = templates::resolve(lang, token, true)?;
+        println!("ok");
+        Some(t)
+    } else {
+        None
+    };
+    let secret_specs = c
+        .language
+        .as_deref()
+        .map(templates::load_secrets)
+        .unwrap_or_default();
     let total = count_steps(c, &secret_specs);
     let mut step = 0usize;
 
@@ -261,20 +282,20 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
     // 2. Collect all boilerplate files for a single init commit
     let mut init_files: Vec<contents::TreeFile> = vec![];
 
-    // Template files (boilerplate — all files including ci.yml, release.yml, etc.)
-    for f in tmpl.boilerplate_files(name, &c.description, owner) {
+    if let Some(tmpl) = &tmpl {
+        for f in tmpl.boilerplate_files(name, &c.description, owner) {
+            init_files.push(contents::TreeFile {
+                path: f.path,
+                content: f.content,
+            });
+        }
+
+        let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
         init_files.push(contents::TreeFile {
-            path: f.path,
-            content: f.content,
+            path: ".gitignore".into(),
+            content: gitignore,
         });
     }
-
-    // .gitignore — fetched fresh from GitHub's gitignore API
-    let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
-    init_files.push(contents::TreeFile {
-        path: ".gitignore".into(),
-        content: gitignore,
-    });
 
     // LICENSE (placeholder — user replaces it or CI generates it)
     if let Some(lic) = &c.license {
@@ -288,52 +309,49 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         });
     }
 
-    // 3. Single init commit with all files
+    // 3. Single init commit with all files (skip if empty repo with no LICENSE)
     let mut init_sha = String::new();
-    step!("init repository", {
-        let sha = contents::create_tree_commit(
-            client,
-            owner,
-            name,
-            &init_files,
-            "chore: init repository",
-            &c.default_branch,
-        )?;
-        init_sha = sha;
-        Ok::<(), anyhow::Error>(())
-    });
+    if !init_files.is_empty() {
+        step!("init repository", {
+            let sha = contents::create_tree_commit(
+                client,
+                owner,
+                name,
+                &init_files,
+                "chore: init repository",
+                &c.default_branch,
+            )?;
+            init_sha = sha;
+            Ok::<(), anyhow::Error>(())
+        });
+    }
 
     // 4. develop branch
     if c.create_develop {
+        if init_sha.is_empty() {
+            init_sha = branches::get_branch_sha(client, owner, name, &c.default_branch)?;
+        }
         step!("create develop branch", {
             branches::create_branch(client, owner, name, "develop", &init_sha)?;
             Ok::<(), anyhow::Error>(())
         });
     }
 
-    // 5. Branch protection — always applied to main (and develop if created)
+    // 5. Branch protection
+    let ci_check = c
+        .language
+        .as_deref()
+        .map(|_| "rust-ci / Format, Lint & Test");
     step!(
         &format!("apply branch protection ({})", c.default_branch),
         {
-            branches::apply_branch_protection(
-                client,
-                owner,
-                name,
-                &c.default_branch,
-                "rust-ci / Format, Lint & Test",
-            )?;
+            branches::apply_branch_protection(client, owner, name, &c.default_branch, ci_check)?;
             Ok::<(), anyhow::Error>(())
         }
     );
     if c.create_develop {
         step!("apply branch protection (develop)", {
-            branches::apply_branch_protection(
-                client,
-                owner,
-                name,
-                "develop",
-                "rust-ci / Format, Lint & Test",
-            )?;
+            branches::apply_branch_protection(client, owner, name, "develop", ci_check)?;
             Ok::<(), anyhow::Error>(())
         });
     }
@@ -348,6 +366,11 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
                     labels::update_label(client, owner, name, &label.name, label)?;
                 } else {
                     labels::create_label(client, owner, name, label)?;
+                }
+            }
+            for existing_label in &existing {
+                if !standard.iter().any(|s| s.name == existing_label.name) {
+                    let _ = labels::delete_label(client, owner, name, &existing_label.name);
                 }
             }
             Ok::<(), anyhow::Error>(())
@@ -376,24 +399,35 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
         );
     }
 
-    // 9. Secrets from template — read from env first, prompt if missing, warn if skipped
+    // 9. Template secrets: env → vault → prompt
     for spec in &secret_specs {
-        let value = if let Ok(env_val) = std::env::var(&spec.name) {
-            println!("  ◆ Secret {}: using value from environment", spec.name);
-            Some(env_val)
+        let value = if let Some(val) = crate::vault::resolve_secret(&spec.name, passphrase)? {
+            println!("  ◆ Secret {}: found", spec.name);
+            Some(val)
         } else {
             let ans = Password::new(&format!("Secret {} (enter to skip):", spec.name))
                 .with_help_message(&spec.description)
                 .without_confirmation()
                 .prompt_skippable()?;
-            if ans.as_deref().map(str::is_empty).unwrap_or(true) {
-                println!(
-                    "  ⚠ Secret {} not configured — set ${} and re-run `ghscaff apply`",
-                    spec.name, spec.name
-                );
-                None
-            } else {
-                ans
+            match ans.as_deref() {
+                Some(v) if !v.is_empty() => {
+                    let save_it = Confirm::new("  Save this secret in the vault for future use?")
+                        .with_default(true)
+                        .prompt()
+                        .unwrap_or(false);
+                    if save_it {
+                        crate::vault::save_secret(&spec.name, v, passphrase)?;
+                        println!("  \x1b[32m✓\x1b[0m Secret saved to vault");
+                    }
+                    Some(v.to_string())
+                }
+                _ => {
+                    println!(
+                        "  ⚠ Secret {} not configured — re-run `ghscaff apply` to set it later",
+                        spec.name
+                    );
+                    None
+                }
             }
         };
         if let Some(val) = value {
@@ -407,30 +441,104 @@ fn execute(client: &GithubClient, c: &WizardConfig, dry_run: bool, token: &str) 
     }
 
     println!();
-    if let Some(r) = created_repo {
+    if let Some(r) = &created_repo {
         println!("  Done  —  {}", r.html_url);
     } else {
         println!("  Done  (dry-run)");
     }
     println!();
+
+    if !dry_run {
+        if let Some(_r) = &created_repo {
+            offer_gitkit_clone(owner, name);
+        }
+    }
+
     Ok(())
+}
+
+fn offer_gitkit_clone(owner: &str, repo: &str) {
+    let Ok(want_clone) = Confirm::new("Clone the repository with gitkit?")
+        .with_default(true)
+        .prompt()
+    else {
+        return;
+    };
+    if !want_clone {
+        return;
+    }
+
+    let protocol = Select::new("Clone via:", vec!["SSH", "HTTPS"])
+        .prompt()
+        .unwrap_or("HTTPS");
+
+    let clone_url = match protocol {
+        "SSH" => format!("git@github.com:{owner}/{repo}.git"),
+        _ => format!("https://github.com/{owner}/{repo}.git"),
+    };
+
+    if !is_command_available("gitkit") {
+        println!("  gitkit not found. Installing...\n");
+        install_gitkit();
+        if !is_command_available("gitkit") {
+            println!("  ⚠ gitkit installation failed — clone manually with:");
+            println!("    gitkit clone {clone_url}");
+            return;
+        }
+    }
+
+    let _ = std::process::Command::new("gitkit")
+        .args(["clone", &clone_url])
+        .status();
+}
+
+fn is_command_available(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn install_gitkit() {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "curl -fsSL https://raw.githubusercontent.com/UniverLab/gitkit/main/scripts/install.sh | sh",
+            ])
+            .status();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("powershell")
+            .args([
+                "-Command",
+                "irm https://raw.githubusercontent.com/UniverLab/gitkit/main/scripts/install.ps1 | iex",
+            ])
+            .status();
+    }
 }
 
 fn count_steps(c: &WizardConfig, secrets: &[templates::SecretSpec]) -> usize {
     let mut n = 1; // create repo
-    n += 1; // init commit (all boilerplate files in one shot)
+    let has_files = c.language.is_some() || c.license.is_some();
+    if has_files {
+        n += 1; // init commit
+    }
     if c.create_develop {
-        n += 1; // create develop
+        n += 1;
         n += 1; // protect develop
     }
-    n += 1; // protect main (always)
+    n += 1; // protect main
     if c.create_labels {
         n += 1;
     }
     if !c.topics.is_empty() {
         n += 1;
     }
-    n += c.team_access.len(); // one step per team
+    n += c.team_access.len();
     n += secrets.len();
     n
 }
@@ -459,7 +567,7 @@ mod tests {
             private: false,
             owner: "my-org".to_string(),
             is_org: true,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: true,
             license: Some("MIT".to_string()),
@@ -484,7 +592,7 @@ mod tests {
             private: true,
             owner: "my-user".to_string(),
             is_org: false,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: false,
             license: None,
@@ -516,7 +624,7 @@ mod tests {
             private: false,
             owner: "org".to_string(),
             is_org: true,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: true,
             license: Some("MIT".to_string()),
@@ -546,7 +654,7 @@ mod tests {
             private: false,
             owner: "user".to_string(),
             is_org: false,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: false,
             license: None,
@@ -576,7 +684,7 @@ mod tests {
             private: false,
             owner: "org".to_string(),
             is_org: true,
-            language: "rust".to_string(),
+            language: Some("rust".to_string()),
             default_branch: "main".to_string(),
             create_develop: true,
             license: Some("Apache-2.0".to_string()),

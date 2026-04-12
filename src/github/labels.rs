@@ -31,6 +31,11 @@ pub fn update_label(
     Ok(())
 }
 
+pub fn delete_label(client: &GithubClient, owner: &str, repo: &str, name: &str) -> Result<()> {
+    let encoded = urlencoding::encode(name);
+    client.delete(&format!("/repos/{owner}/{repo}/labels/{encoded}"))
+}
+
 pub fn standard_labels() -> Vec<Label> {
     vec![
         Label {
@@ -54,9 +59,14 @@ pub fn standard_labels() -> Vec<Label> {
             description: "Introduces breaking changes".into(),
         },
         Label {
-            name: "good first issue".into(),
-            color: "7057ff".into(),
-            description: "Good for newcomers".into(),
+            name: "target:main".into(),
+            color: "1d76db".into(),
+            description: "Targets the main branch".into(),
+        },
+        Label {
+            name: "target:develop".into(),
+            color: "0e8a16".into(),
+            description: "Targets the develop branch".into(),
         },
         Label {
             name: "help wanted".into(),
@@ -73,7 +83,7 @@ mod tests {
     #[test]
     fn test_standard_labels_count() {
         let labels = standard_labels();
-        assert_eq!(labels.len(), 6, "Should have exactly 6 standard labels");
+        assert_eq!(labels.len(), 7, "Should have exactly 7 standard labels");
     }
 
     #[test]
@@ -139,5 +149,12 @@ mod tests {
         assert_eq!(deserialized.name, label.name);
         assert_eq!(deserialized.color, label.color);
         assert_eq!(deserialized.description, label.description);
+    }
+
+    #[test]
+    fn test_target_labels_exist() {
+        let labels = standard_labels();
+        assert!(labels.iter().any(|l| l.name == "target:main"));
+        assert!(labels.iter().any(|l| l.name == "target:develop"));
     }
 }
