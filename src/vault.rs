@@ -350,12 +350,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("vault.enc");
 
-        let mut data1 = VaultData::default();
-        data1.github_token = Some("token_v1".into());
+        let data1 = VaultData {
+            github_token: Some("token_v1".into()),
+            ..Default::default()
+        };
         save_to_path(&data1, "", &path).unwrap();
 
-        let mut data2 = VaultData::default();
-        data2.github_token = Some("token_v2".into());
+        let data2 = VaultData {
+            github_token: Some("token_v2".into()),
+            ..Default::default()
+        };
         save_to_path(&data2, "", &path).unwrap();
 
         let loaded = load_from_path("", &path).unwrap().unwrap();
