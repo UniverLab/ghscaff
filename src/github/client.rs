@@ -12,13 +12,14 @@ fn check_status(resp: Response) -> Result<Response> {
     if status.is_success() {
         return Ok(resp);
     }
-    let url = resp.url().to_string();
+    let path = resp.url().path().to_string();
     let body = resp.text().unwrap_or_default();
     let message = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
         .and_then(|v| v["message"].as_str().map(String::from))
         .unwrap_or(body);
-    anyhow::bail!("{status} — {message}\n  URL: {url}")
+    let api_path = path.strip_prefix('/').unwrap_or(&path);
+    anyhow::bail!("{status} — {message}\n  API: {api_path}")
 }
 
 impl GithubClient {
@@ -105,6 +106,22 @@ impl GithubClient {
             .send()
             .context("HTTP DELETE failed")?;
         check_status(resp)?;
+        Ok(())
+    }
+
+    pub fn validate_scopes(&self) -> Result<()> {
+        let user = self.get::<serde_json::Value>("/user")?;
+
+        let message = user.get("message").and_then(|m| m.as_str());
+
+        if let Some(msg) = message {
+            if msg.contains("API rate limit") {
+                anyhow::bail!("GitHub API rate limit exceeded");
+            } else if msg.contains("Bad credentials") {
+                anyhow::bail!("GitHub token is invalid or expired");
+            }
+        }
+
         Ok(())
     }
 }
