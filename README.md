@@ -121,6 +121,12 @@ ghscaff --dry-run
 ghscaff config
 ```
 
+## Documentation
+
+Full documentation lives in [`docs/`](docs/): installation, quick start,
+authentication and the encrypted vault, the wizard, apply mode, templates
+& conventions, and the complete CLI reference.
+
 ---
 
 ## Authentication
@@ -282,4 +288,5 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ---
 
-Made with ❤️ by [JheisonMB](https://github.com/JheisonMB) and [UniverLab](https://github.com/UniverLab)
+An experiment of [UniverLab](https://github.com/UniverLab) — an open computational laboratory.
+Made with ❤️ by [JheisonMB](https://github.com/JheisonMB)
