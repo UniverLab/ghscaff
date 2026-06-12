@@ -112,9 +112,7 @@ impl GithubClient {
     pub fn validate_scopes(&self) -> Result<()> {
         let user = self.get::<serde_json::Value>("/user")?;
 
-        let message = user
-            .get("message")
-            .and_then(|m| m.as_str());
+        let message = user.get("message").and_then(|m| m.as_str());
 
         if let Some(msg) = message {
             if msg.contains("API rate limit") {
