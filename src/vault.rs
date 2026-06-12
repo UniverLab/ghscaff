@@ -20,7 +20,8 @@ pub struct VaultData {
     pub secrets: HashMap<String, String>,
 }
 
-/// Blake2b-256(username ‖ hostname ‖ binary_path ‖ passphrase ‖ domain)
+/// Blake2b-256(username ‖ hostname ‖ passphrase ‖ domain)
+/// Note: Removed binary_path to allow vault to work even if binary is relocated
 fn derive_key(passphrase: &str) -> Result<[u8; KEY_LEN]> {
     let mut hasher = Blake2bVar::new(KEY_LEN).expect("valid output size");
     Update::update(&mut hasher, whoami::username().as_bytes());
@@ -28,14 +29,6 @@ fn derive_key(passphrase: &str) -> Result<[u8; KEY_LEN]> {
     Update::update(
         &mut hasher,
         whoami::fallible::hostname().unwrap_or_default().as_bytes(),
-    );
-    Update::update(&mut hasher, b"|");
-    Update::update(
-        &mut hasher,
-        std::env::current_exe()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .as_bytes(),
     );
     Update::update(&mut hasher, b"|");
     Update::update(&mut hasher, passphrase.as_bytes());
@@ -234,9 +227,23 @@ fn ask_optional_passphrase() -> Result<String> {
         return Ok(String::new());
     }
 
-    Ok(inquire::Password::new("Passphrase:")
-        .prompt()
-        .unwrap_or_default())
+    loop {
+        let passphrase = inquire::Password::new("Passphrase:")
+            .with_help_message("Minimum 8 characters recommended")
+            .prompt()?;
+
+        if passphrase.len() < 8 {
+            println!("  \x1b[33m⚠ Passphrase is weak (less than 8 characters)\x1b[0m");
+            let confirm_weak = inquire::Confirm::new("Use this weak passphrase anyway?")
+                .with_default(false)
+                .prompt()?;
+            if !confirm_weak {
+                continue;
+            }
+        }
+
+        return Ok(passphrase);
+    }
 }
 
 pub fn save_secret(name: &str, value: &str, passphrase: &str) -> Result<()> {

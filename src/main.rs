@@ -76,9 +76,10 @@ fn run_config() -> Result<()> {
     println!();
     let (token, _) = vault::prompt_and_save_github_token()?;
 
-    // Validate
+    // Validate token
     let client = github::client::GithubClient::new(&token);
     print!("  Validating token... ");
+    client.validate_scopes()?;
     let user = github::repo::get_user(&client)?;
     println!("ok  ({})", user.login);
 
