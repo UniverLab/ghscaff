@@ -229,11 +229,11 @@ fn ask_optional_passphrase() -> Result<String> {
 
     loop {
         let passphrase = inquire::Password::new("Passphrase:")
-            .with_help_message("Minimum 8 characters recommended")
+            .with_help_message("Minimum 5 characters recommended")
             .prompt()?;
 
-        if passphrase.len() < 8 {
-            println!("  \x1b[33m⚠ Passphrase is weak (less than 8 characters)\x1b[0m");
+        if passphrase.len() < 5 {
+            println!("  \x1b[33m⚠ Passphrase is weak (less than 5 characters)\x1b[0m");
             let confirm_weak = inquire::Confirm::new("Use this weak passphrase anyway?")
                 .with_default(false)
                 .prompt()?;
