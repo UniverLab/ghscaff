@@ -156,16 +156,17 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         vec![]
     };
 
-    // Step 3 — Language
-    let mut lang_options: Vec<&str> = templates::AVAILABLE.to_vec();
-    lang_options.push("none");
+    // Step 3 — Language. Read the live list from the boilerplate repo so new
+    // templates appear without a new ghscaff release.
+    let mut lang_options: Vec<String> = templates::available(client);
+    lang_options.push("none".to_string());
     let lang_choice = Select::new("Template:", lang_options)
         .with_help_message("Drives .gitignore, CI workflow, and boilerplate. 'none' = empty repo")
         .prompt()?;
     let language = if lang_choice == "none" {
         None
     } else {
-        Some(lang_choice.to_string())
+        Some(lang_choice)
     };
 
     // Step 4 — Branches

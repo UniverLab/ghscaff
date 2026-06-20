@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
+use crate::github::client::GithubClient;
+
 const BOILERPLATE_REPO: &str = "UniverLab/ghscaff-boilerplate";
 
 // Files excluded from boilerplate_files() — handled separately or metadata
@@ -103,12 +105,6 @@ pub fn resolve(
     token: &str,
     force_refresh: bool,
 ) -> Result<Box<dyn LanguageTemplate>> {
-    if !AVAILABLE.contains(&language) {
-        anyhow::bail!(
-            "Unknown language: {language}. Available: {}",
-            AVAILABLE.join(", ")
-        );
-    }
     let cache = cache_dir()?.join(language);
     if force_refresh && cache.exists() {
         std::fs::remove_dir_all(&cache)?;
@@ -116,8 +112,15 @@ pub fn resolve(
     if !cache.exists() {
         download(language, token)?;
     }
-    if !cache.exists() {
-        anyhow::bail!("Template '{language}' could not be fetched from {BOILERPLATE_REPO}");
+    // An empty (or missing) cache dir means the boilerplate isn't in the repo:
+    // download() creates the dir but unpacks nothing for an unknown language.
+    let has_files = cache.exists()
+        && std::fs::read_dir(&cache)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+    if !has_files {
+        let _ = std::fs::remove_dir_all(&cache);
+        anyhow::bail!("Boilerplate '{language}' not found in {BOILERPLATE_REPO}");
     }
     Ok(Box::new(RemoteTemplate { cache_dir: cache }))
 }
@@ -187,7 +190,39 @@ pub fn apply_placeholders(dir: &Path, name: &str, description: &str, author: &st
     Ok(())
 }
 
+/// Built-in fallback list, used only when the boilerplate repo can't be reached.
 pub const AVAILABLE: &[&str] = &["rust"];
+
+#[derive(Deserialize)]
+struct ContentEntry {
+    name: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
+/// List the boilerplate languages available in the remote repo by reading its
+/// top-level directories. Always consults the repo so a newly added boilerplate
+/// shows up without shipping a new ghscaff release; falls back to [`AVAILABLE`]
+/// if the repo can't be reached.
+pub fn available(client: &GithubClient) -> Vec<String> {
+    let fallback = || AVAILABLE.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    match client.get::<Vec<ContentEntry>>(&format!("/repos/{BOILERPLATE_REPO}/contents")) {
+        Ok(entries) => {
+            let mut dirs: Vec<String> = entries
+                .into_iter()
+                .filter(|e| e.entry_type == "dir" && !e.name.starts_with('.'))
+                .map(|e| e.name)
+                .collect();
+            dirs.sort();
+            if dirs.is_empty() {
+                fallback()
+            } else {
+                dirs
+            }
+        }
+        Err(_) => fallback(),
+    }
+}
 
 /// A secret required by a template (declared in secrets.toml).
 #[derive(Debug, Clone, Deserialize)]
