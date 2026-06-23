@@ -119,12 +119,17 @@ pub fn apply_branch_protection(
             &body,
         ) {
             Ok(_) => return Ok(()),
-            Err(e) if attempt < 4 && e.to_string().contains("422") => {
-                if crate::is_debug() {
-                    eprintln!("  [debug] Branch protection attempt {} failed: {}", attempt + 1, e);
+            Err(e) if attempt < 4 => {
+                let err_str = e.to_string();
+                if err_str.contains("422") || err_str.contains("Validation Failed") {
+                    if crate::is_debug() {
+                        eprintln!("  [debug] Branch protection attempt {} failed: {}", attempt + 1, e);
+                    }
+                    std::thread::sleep(delay);
+                    delay *= 2;
+                    continue;
                 }
-                std::thread::sleep(delay);
-                delay *= 2;
+                return Err(e);
             }
             Err(e) => return Err(e),
         }
