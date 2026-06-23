@@ -116,7 +116,17 @@ fn collect_team_access(client: &GithubClient, _org: &str) -> Result<Vec<teams::T
 
 fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig> {
     // Step 1 — Repository basics
-    let name = Text::new("Repository name:").prompt()?;
+    let name = Text::new("Repository name:")
+        .with_validator(|input: &str| {
+            if input.trim().is_empty() {
+                Ok(inquire::validator::Validation::Invalid(
+                    "Repository name cannot be empty".into(),
+                ))
+            } else {
+                Ok(inquire::validator::Validation::Valid)
+            }
+        })
+        .prompt()?;
     let description = Text::new("Description:").with_default("").prompt()?;
     let topics_raw = Text::new("Topics:")
         .with_default("")
