@@ -98,32 +98,56 @@ pub fn apply_branch_protection(
     // Wait for branch to be indexed by GitHub (up to 10 seconds)
     let mut wait = std::time::Duration::from_millis(500);
     for attempt in 0..5 {
+        if crate::is_debug() {
+            eprintln!("  [debug] Checking branch {} exists (attempt {}/{})", branch, attempt + 1, 5);
+        }
         match get_branch_sha(client, owner, repo, branch) {
-            Ok(_) => break,
-            Err(_) if attempt < 4 => {
+            Ok(sha) => {
                 if crate::is_debug() {
-                    eprintln!("  [debug] Waiting for branch {} to be indexed (attempt {})", branch, attempt + 1);
+                    eprintln!("  [debug] Branch {} found: {}", branch, sha);
+                }
+                break;
+            }
+            Err(e) if attempt < 4 => {
+                if crate::is_debug() {
+                    eprintln!("  [debug] Branch {} not found yet: {}, waiting {:?}", branch, e, wait);
                 }
                 std::thread::sleep(wait);
                 wait *= 2;
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                if crate::is_debug() {
+                    eprintln!("  [debug] Branch {} check failed after 5 attempts: {}", branch, e);
+                }
+                return Err(e);
+            }
         }
     }
     
     // Retry with backoff for 422 errors (GitHub indexing delay)
     let mut delay = std::time::Duration::from_millis(1000);
     for attempt in 0..5 {
+        if crate::is_debug() {
+            eprintln!("  [debug] Applying branch protection to {} (attempt {}/{})", branch, attempt + 1, 5);
+        }
         match client.put::<_, serde_json::Value>(
             &format!("/repos/{owner}/{repo}/branches/{branch}/protection"),
             &body,
         ) {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                if crate::is_debug() {
+                    eprintln!("  [debug] Branch protection applied successfully to {}", branch);
+                }
+                return Ok(());
+            }
             Err(e) if attempt < 4 => {
                 let err_str = e.to_string();
+                if crate::is_debug() {
+                    eprintln!("  [debug] Protection attempt {} failed: {}", attempt + 1, err_str);
+                }
                 if err_str.contains("422") || err_str.contains("Validation Failed") {
                     if crate::is_debug() {
-                        eprintln!("  [debug] Branch protection attempt {} failed: {}", attempt + 1, e);
+                        eprintln!("  [debug] Retrying in {:?}", delay);
                     }
                     std::thread::sleep(delay);
                     delay *= 2;
@@ -131,7 +155,12 @@ pub fn apply_branch_protection(
                 }
                 return Err(e);
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                if crate::is_debug() {
+                    eprintln!("  [debug] Branch protection failed after 5 attempts: {}", e);
+                }
+                return Err(e);
+            }
         }
     }
     Ok(())
