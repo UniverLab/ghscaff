@@ -205,22 +205,52 @@ struct ContentEntry {
 /// shows up without shipping a new ghscaff release; falls back to [`AVAILABLE`]
 /// if the repo can't be reached.
 pub fn available(client: &GithubClient) -> Vec<String> {
-    let fallback = || AVAILABLE.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    match client.get::<Vec<ContentEntry>>(&format!("/repos/{BOILERPLATE_REPO}/contents")) {
+    let debug = crate::is_debug();
+    let fallback = || {
+        if debug {
+            eprintln!(
+                "  [debug] Using fallback boilerplate list: {:?}",
+                AVAILABLE
+            );
+        }
+        AVAILABLE.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+    };
+    let path = format!("/repos/{BOILERPLATE_REPO}/contents");
+    if debug {
+        eprintln!("  [debug] Fetching: {}", path);
+    }
+    match client.get::<Vec<ContentEntry>>(&path) {
         Ok(entries) => {
+            if debug {
+                eprintln!("  [debug] Got {} entries", entries.len());
+                for e in &entries {
+                    eprintln!("  [debug]   {} (type: {})", e.name, e.entry_type);
+                }
+            }
             let mut dirs: Vec<String> = entries
                 .into_iter()
                 .filter(|e| e.entry_type == "dir" && !e.name.starts_with('.'))
                 .map(|e| e.name)
                 .collect();
             dirs.sort();
+            if debug {
+                eprintln!("  [debug] Filtered dirs: {:?}", dirs);
+            }
             if dirs.is_empty() {
+                if debug {
+                    eprintln!("  [debug] No directories found in boilerplate repo.");
+                }
                 fallback()
             } else {
                 dirs
             }
         }
-        Err(_) => fallback(),
+        Err(e) => {
+            if debug {
+                eprintln!("  [debug] Failed to fetch boilerplate list: {}", e);
+            }
+            fallback()
+        }
     }
 }
 
