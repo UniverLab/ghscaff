@@ -94,9 +94,24 @@ pub fn apply_branch_protection(
         },
         allow_force_pushes: false,
     };
-    let _: serde_json::Value = client.put(
-        &format!("/repos/{owner}/{repo}/branches/{branch}/protection"),
-        &body,
-    )?;
+    
+    // Retry with backoff for 422 errors (GitHub indexing delay)
+    let mut delay = std::time::Duration::from_millis(500);
+    for attempt in 0..3 {
+        match client.put::<_, serde_json::Value>(
+            &format!("/repos/{owner}/{repo}/branches/{branch}/protection"),
+            &body,
+        ) {
+            Ok(_) => return Ok(()),
+            Err(e) if attempt < 2 && e.to_string().contains("422") => {
+                if crate::is_debug() {
+                    eprintln!("  [debug] Branch protection attempt {} failed: {}", attempt + 1, e);
+                }
+                std::thread::sleep(delay);
+                delay *= 2;
+            }
+            Err(e) => return Err(e),
+        }
+    }
     Ok(())
 }
