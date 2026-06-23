@@ -95,15 +95,31 @@ pub fn apply_branch_protection(
         allow_force_pushes: false,
     };
     
+    // Wait for branch to be indexed by GitHub (up to 10 seconds)
+    let mut wait = std::time::Duration::from_millis(500);
+    for attempt in 0..5 {
+        match get_branch_sha(client, owner, repo, branch) {
+            Ok(_) => break,
+            Err(_) if attempt < 4 => {
+                if crate::is_debug() {
+                    eprintln!("  [debug] Waiting for branch {} to be indexed (attempt {})", branch, attempt + 1);
+                }
+                std::thread::sleep(wait);
+                wait *= 2;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    
     // Retry with backoff for 422 errors (GitHub indexing delay)
-    let mut delay = std::time::Duration::from_millis(500);
-    for attempt in 0..3 {
+    let mut delay = std::time::Duration::from_millis(1000);
+    for attempt in 0..5 {
         match client.put::<_, serde_json::Value>(
             &format!("/repos/{owner}/{repo}/branches/{branch}/protection"),
             &body,
         ) {
             Ok(_) => return Ok(()),
-            Err(e) if attempt < 2 && e.to_string().contains("422") => {
+            Err(e) if attempt < 4 && e.to_string().contains("422") => {
                 if crate::is_debug() {
                     eprintln!("  [debug] Branch protection attempt {} failed: {}", attempt + 1, e);
                 }
