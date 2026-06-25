@@ -416,30 +416,7 @@ fn execute(
             println!("  ◆ Secret {}: found", spec.name);
             Some(val)
         } else {
-            let ans = Password::new(&format!("Secret {} (enter to skip):", spec.name))
-                .with_help_message(&spec.description)
-                .without_confirmation()
-                .prompt_skippable()?;
-            match ans.as_deref() {
-                Some(v) if !v.is_empty() => {
-                    let save_it = Confirm::new("  Save this secret in the vault for future use?")
-                        .with_default(true)
-                        .prompt()
-                        .unwrap_or(false);
-                    if save_it {
-                        crate::vault::save_secret(&spec.name, v, passphrase)?;
-                        println!("  \x1b[32m✓\x1b[0m Secret saved to vault");
-                    }
-                    Some(v.to_string())
-                }
-                _ => {
-                    println!(
-                        "  ⚠ Secret {} not configured — re-run `ghscaff apply` to set it later",
-                        spec.name
-                    );
-                    None
-                }
-            }
+            prompt_secret_value(spec, passphrase)?
         };
         if let Some(val) = value {
             step!(&format!("configure secret {}", spec.name), {
@@ -529,6 +506,65 @@ fn install_gitkit() {
                 "irm https://raw.githubusercontent.com/UniverLab/gitkit/main/scripts/install.ps1 | iex",
             ])
             .status();
+    }
+}
+
+/// Prompt the user for a template secret that wasn't found in env/vault.
+///
+/// A required secret re-prompts on an empty entry instead of silently skipping —
+/// this both enforces the requirement and defends against a stray buffered newline
+/// (left over from earlier prompts) auto-submitting an empty value before the user
+/// can type. Skipping a required secret takes an explicit confirmation. An explicit
+/// cancel (ESC) or a non-interactive stdin returns `None` without looping.
+pub(crate) fn prompt_secret_value(
+    spec: &templates::SecretSpec,
+    passphrase: &str,
+) -> Result<Option<String>> {
+    let skipped = || {
+        println!(
+            "  ⚠ Secret {} not configured — re-run `ghscaff apply` to set it later",
+            spec.name
+        );
+    };
+    loop {
+        let ans = Password::new(&format!("Secret {}:", spec.name))
+            .with_help_message(&spec.description)
+            .without_confirmation()
+            .prompt_skippable()?;
+        match ans.as_deref() {
+            Some(v) if !v.is_empty() => {
+                let save_it = Confirm::new("  Save this secret in the vault for future use?")
+                    .with_default(true)
+                    .prompt()
+                    .unwrap_or(false);
+                if save_it {
+                    crate::vault::save_secret(&spec.name, v, passphrase)?;
+                    println!("  \x1b[32m✓\x1b[0m Secret saved to vault");
+                }
+                return Ok(Some(v.to_string()));
+            }
+            // Empty entry on a required secret — likely an accidental/auto-submitted
+            // skip. Ask for explicit intent; re-prompt unless the user confirms skip.
+            Some(_) if spec.required => {
+                let skip = Confirm::new(&format!(
+                    "  Secret {} is required by this template. Skip and set it later?",
+                    spec.name
+                ))
+                .with_default(false)
+                .prompt()
+                .unwrap_or(false);
+                if skip {
+                    skipped();
+                    return Ok(None);
+                }
+                // otherwise loop and prompt again
+            }
+            // Explicit cancel (None) or an empty optional secret — skip without looping.
+            _ => {
+                skipped();
+                return Ok(None);
+            }
+        }
     }
 }
 

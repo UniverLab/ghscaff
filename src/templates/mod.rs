@@ -260,7 +260,6 @@ pub struct SecretSpec {
     pub name: String,
     pub description: String,
     #[serde(default = "default_true")]
-    #[allow(dead_code)]
     pub required: bool,
 }
 
