@@ -10,13 +10,13 @@ order: 7
 
 Each language template includes:
 
-- **Dependency manifest** — `Cargo.toml`, `package.json`, …
-- **Entry point** — e.g. `src/main.rs` boilerplate.
+- **Dependency manifest** — e.g. `Cargo.toml`
+- **Entry point** — boilerplate source file.
 - **README.md** — with placeholders for name and description.
 - **.gitignore** — language-specific (fetched from the GitHub API).
 - **.github/workflows/ci.yml** — CI workflow with basic checks.
 - **.github/workflows/release.yml** — release workflow (runs on git tags).
-- **LICENSE** — selected during the wizard.
+- **LICENSE** — fetched from the API based on the license selected during the wizard.
 
 All files land in a single atomic `chore: init repository` commit.
 

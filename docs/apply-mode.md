@@ -25,6 +25,7 @@ ghscaff apply
 - ✅ Branch protection on `main` and `develop` (if created).
 - ✅ Topics — merged with existing ones.
 - ✅ GitHub Actions secrets — from vault, env, or interactive prompt.
+- ✅ Team access — optionally select teams and assign permissions interactively.
 - ✅ CI/CD workflows — included in the boilerplate.
 - ✅ `develop` branch — created if absent.
 
