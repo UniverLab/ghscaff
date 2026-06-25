@@ -9,7 +9,7 @@
  ░░░░░███░░░░ ░░░░░  ░░░░░░░░░   ░░░░░░   ░░░░░░░░  ░░░░░      ░░░░░     
  ███ ░███                                                                
 ░░██████                                                                 
- ░░░░░░                                                                   
+ ░░░░░░                                                                  
 ```
 
 <p align="center">
@@ -23,7 +23,7 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 
 ---
 
-![Demo](assets/demo.gif)
+![Demo](demo/dist/demo.gif)
 
 ---
 

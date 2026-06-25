@@ -1,15 +1,17 @@
 [demo]
-name = "macro"
+name = "demo"
 output_dir = "./dist"
+prompt = '\[\e[1;32m\]ghscaff@demo\[\e[0m\]:\[\e[1;34m\]~\[\e[0m\]$ '
 
 [typing]
 base_ms = 80
 salt_ms = 15
 
 [layout]
-width = 1330
+width = 810
 height = 920
 fps = 15
+line_height = 1.2000000476837158
 background = "#0b0f14"
 
 [[layout.panes]]
@@ -17,10 +19,20 @@ id = "main"
 type = "terminal"
 x = 0
 y = 0
-width = 1330
+width = 810
 height = 920
 font_family = "monospace"
 font_size = 16
+
+[[layout.panes]]
+id = "scene1"
+type = "browser"
+x = 0
+y = 0
+width = 810
+height = 920
+url = "https://github.com/JheisonMB/demo-ghscaff"
+theme = "dark"
 
 [[timeline]]
 action = "focus"
@@ -28,12 +40,12 @@ pane = "main"
 
 [[timeline]]
 action = "type"
-text = "ghscaff new"
+text = "ghscaff"
 human_salt = true
 
 [[timeline]]
 action = "wait"
-duration_ms = 149
+duration_ms = 1287
 
 [[timeline]]
 action = "keypress"
@@ -41,24 +53,11 @@ key = "enter"
 
 [[timeline]]
 action = "wait"
-duration_ms = 2494
+duration_ms = 2500
 
 [[timeline]]
-action = "type"
-text = "Marbol"
-human_salt = true
-
-[[timeline]]
-action = "wait"
-duration_ms = 253
-
-[[timeline]]
-action = "keypress"
-key = "enter"
-
-[[timeline]]
-action = "wait"
-duration_ms = 2013
+action = "secret"
+prompt = "Vault passphrase:"
 
 [[timeline]]
 action = "type"
@@ -67,7 +66,153 @@ human_salt = true
 
 [[timeline]]
 action = "wait"
-duration_ms = 376
+duration_ms = 360
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 2304
+
+[[timeline]]
+action = "type"
+text = "a demo repository"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 390
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1441
+
+[[timeline]]
+action = "type"
+text = "demo,ghscaff,temp"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 2500
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1183
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1268
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1129
+
+[[timeline]]
+action = "keypress"
+key = "down"
+
+[[timeline]]
+action = "wait"
+duration_ms = 243
+
+[[timeline]]
+action = "keypress"
+key = "down"
+
+[[timeline]]
+action = "wait"
+duration_ms = 409
+
+[[timeline]]
+action = "keypress"
+key = "up"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1542
+
+[[timeline]]
+action = "keypress"
+key = "up"
+
+[[timeline]]
+action = "wait"
+duration_ms = 406
+
+[[timeline]]
+action = "keypress"
+key = "down"
+
+[[timeline]]
+action = "wait"
+duration_ms = 155
+
+[[timeline]]
+action = "keypress"
+key = "down"
+
+[[timeline]]
+action = "wait"
+duration_ms = 332
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 2137
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1332
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1140
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 841
+
+[[timeline]]
+action = "keypress"
+key = "down"
+
+[[timeline]]
+action = "wait"
+duration_ms = 402
 
 [[timeline]]
 action = "keypress"
@@ -78,70 +223,12 @@ action = "wait"
 duration_ms = 2500
 
 [[timeline]]
-action = "type"
-text = "demo repository"
-human_salt = true
-
-[[timeline]]
-action = "wait"
-duration_ms = 497
-
-[[timeline]]
 action = "keypress"
 key = "enter"
 
 [[timeline]]
 action = "wait"
-duration_ms = 967
-
-[[timeline]]
-action = "type"
-text = "demo,temp,ghscaff"
-human_salt = true
-
-[[timeline]]
-action = "wait"
-duration_ms = 1443
-
-[[timeline]]
-action = "keypress"
-key = "enter"
-
-[[timeline]]
-action = "wait"
-duration_ms = 1206
-
-[[timeline]]
-action = "keypress"
-key = "enter"
-
-[[timeline]]
-action = "wait"
-duration_ms = 1471
-
-[[timeline]]
-action = "keypress"
-key = "enter"
-
-[[timeline]]
-action = "wait"
-duration_ms = 879
-
-[[timeline]]
-action = "keypress"
-key = "enter"
-
-[[timeline]]
-action = "wait"
-duration_ms = 2187
-
-[[timeline]]
-action = "keypress"
-key = "enter"
-
-[[timeline]]
-action = "wait"
-duration_ms = 787
+duration_ms = 2500
 
 [[timeline]]
 action = "type"
@@ -150,40 +237,7 @@ human_salt = true
 
 [[timeline]]
 action = "wait"
-duration_ms = 433
-
-[[timeline]]
-action = "keypress"
-key = "enter"
-
-[[timeline]]
-action = "wait"
-duration_ms = 1041
-
-[[timeline]]
-action = "keypress"
-key = "enter"
-
-[[timeline]]
-action = "wait"
-duration_ms = 2500
-
-[[timeline]]
-action = "keypress"
-key = "enter"
-
-[[timeline]]
-action = "wait"
-duration_ms = 1001
-
-[[timeline]]
-action = "type"
-text = "y"
-human_salt = true
-
-[[timeline]]
-action = "wait"
-duration_ms = 936
+duration_ms = 508
 
 [[timeline]]
 action = "keypress"
@@ -192,6 +246,14 @@ key = "enter"
 [[timeline]]
 action = "wait"
 duration_ms = 1500
+
+[[timeline]]
+action = "focus"
+pane = "scene1"
+
+[[timeline]]
+action = "wait"
+duration_ms = 4000
 
 [[timeline]]
 action = "terminate"
