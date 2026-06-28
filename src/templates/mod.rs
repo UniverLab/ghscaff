@@ -208,10 +208,7 @@ pub fn available(client: &GithubClient) -> Vec<String> {
     let debug = crate::is_debug();
     let fallback = || {
         if debug {
-            eprintln!(
-                "  [debug] Using fallback boilerplate list: {:?}",
-                AVAILABLE
-            );
+            eprintln!("  [debug] Using fallback boilerplate list: {:?}", AVAILABLE);
         }
         AVAILABLE.iter().map(|s| s.to_string()).collect::<Vec<_>>()
     };

@@ -89,12 +89,17 @@ pub fn apply_branch_protection(
         restrictions: None,
         allow_force_pushes: false,
     };
-    
+
     // Wait for branch to be indexed by GitHub (up to 10 seconds)
     let mut wait = std::time::Duration::from_millis(500);
     for attempt in 0..5 {
         if crate::is_debug() {
-            eprintln!("  [debug] Checking branch {} exists (attempt {}/{})", branch, attempt + 1, 5);
+            eprintln!(
+                "  [debug] Checking branch {} exists (attempt {}/{})",
+                branch,
+                attempt + 1,
+                5
+            );
         }
         match get_branch_sha(client, owner, repo, branch) {
             Ok(sha) => {
@@ -105,20 +110,26 @@ pub fn apply_branch_protection(
             }
             Err(e) if attempt < 4 => {
                 if crate::is_debug() {
-                    eprintln!("  [debug] Branch {} not found yet: {}, waiting {:?}", branch, e, wait);
+                    eprintln!(
+                        "  [debug] Branch {} not found yet: {}, waiting {:?}",
+                        branch, e, wait
+                    );
                 }
                 std::thread::sleep(wait);
                 wait *= 2;
             }
             Err(e) => {
                 if crate::is_debug() {
-                    eprintln!("  [debug] Branch {} check failed after 5 attempts: {}", branch, e);
+                    eprintln!(
+                        "  [debug] Branch {} check failed after 5 attempts: {}",
+                        branch, e
+                    );
                 }
                 return Err(e);
             }
         }
     }
-    
+
     if crate::is_debug() {
         eprintln!("  [debug] Applying branch protection to {}", branch);
     }
@@ -127,7 +138,10 @@ pub fn apply_branch_protection(
         &body,
     )?;
     if crate::is_debug() {
-        eprintln!("  [debug] Branch protection applied successfully to {}", branch);
+        eprintln!(
+            "  [debug] Branch protection applied successfully to {}",
+            branch
+        );
     }
     Ok(())
 }

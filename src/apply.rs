@@ -145,25 +145,21 @@ fn detect_template_secrets(
     owner: &str,
     repo: &str,
 ) -> Vec<crate::templates::SecretSpec> {
-    // marker file present in the repo -> boilerplate template dir(s) that use it.
     const MARKERS: &[(&str, &[&str])] = &[
         ("Cargo.toml", &["rust"]),
         ("pyproject.toml", &["python-fastapi", "python-module"]),
     ];
-    let mut specs: Vec<crate::templates::SecretSpec> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (marker, langs) in MARKERS {
-        if check_file_exists(client, owner, repo, marker).unwrap_or(false) {
-            for lang in *langs {
-                for spec in crate::templates::load_secrets(lang) {
-                    if seen.insert(spec.name.clone()) {
-                        specs.push(spec);
-                    }
-                }
-            }
-        }
-    }
-    specs
+    MARKERS
+        .iter()
+        .filter(|(marker, _)| check_file_exists(client, owner, repo, marker).unwrap_or(false))
+        .flat_map(|(_, langs)| {
+            langs
+                .iter()
+                .flat_map(|lang| crate::templates::load_secrets(lang))
+        })
+        .filter(|spec| seen.insert(spec.name.clone()))
+        .collect()
 }
 
 /// Sync labels idempotently - create missing, update existing
@@ -455,12 +451,12 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
             }
             println!();
             for spec in missing {
-                let value = if let Some(val) = crate::vault::resolve_secret(&spec.name, &passphrase)?
-                {
-                    Some(val)
-                } else {
-                    crate::wizard::prompt_secret_value(spec, &passphrase)?
-                };
+                let value =
+                    if let Some(val) = crate::vault::resolve_secret(&spec.name, &passphrase)? {
+                        Some(val)
+                    } else {
+                        crate::wizard::prompt_secret_value(spec, &passphrase)?
+                    };
                 if let Some(val) = value {
                     match secrets::set_secret(&client, &owner, &repo_name, &spec.name, &val) {
                         Ok(()) => println!("  ✓ Secret {} configured", spec.name),
