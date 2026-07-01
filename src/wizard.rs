@@ -308,12 +308,16 @@ fn execute(
         });
     }
 
-    // LICENSE (placeholder — user replaces it or CI generates it)
+    // LICENSE — full text from GitHub's license API, with copyright placeholders
+    // filled in (owner + current year). MIT uses [year]/[fullname]; the Apache
+    // and GPL appendices use [yyyy]/[name of copyright owner].
     if let Some(lic) = &c.license {
-        let license_text = format!(
-            "# {} License\n\nSee https://opensource.org/licenses/{} for the full license text.\n",
-            lic, lic
-        );
+        let year = current_year();
+        let license_text = repo::get_license_template(client, &lic.to_lowercase())?
+            .replace("[year]", &year)
+            .replace("[yyyy]", &year)
+            .replace("[fullname]", owner)
+            .replace("[name of copyright owner]", owner);
         init_files.push(contents::TreeFile {
             path: "LICENSE".into(),
             content: license_text,
@@ -568,6 +572,17 @@ pub(crate) fn prompt_secret_value(
     }
 }
 
+/// Current calendar year as a string, for the LICENSE copyright line. Uses the
+/// average Gregorian year length — accurate to the day, which is fine here and
+/// avoids pulling in a date crate.
+fn current_year() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    (1970 + secs / 31_556_952).to_string()
+}
+
 fn count_steps(c: &WizardConfig, secrets: &[templates::SecretSpec]) -> usize {
     let mut n = 1; // create repo
     let has_files = c.language.is_some() || c.license.is_some();
@@ -593,6 +608,12 @@ fn count_steps(c: &WizardConfig, secrets: &[templates::SecretSpec]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_current_year_is_sane() {
+        let year: u64 = current_year().parse().expect("year should be numeric");
+        assert!((2024..=2100).contains(&year), "unexpected year: {year}");
+    }
 
     #[test]
     fn test_wizard_config_with_team_access() {
