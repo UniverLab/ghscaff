@@ -1,11 +1,22 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod apply;
 mod github;
 mod templates;
 mod vault;
 mod wizard;
+
+static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_debug(enabled: bool) {
+    DEBUG_MODE.store(enabled, Ordering::Relaxed);
+}
+
+pub fn is_debug() -> bool {
+    DEBUG_MODE.load(Ordering::Relaxed)
+}
 
 #[derive(Parser)]
 #[command(
@@ -20,6 +31,10 @@ struct Cli {
     /// Preview changes without making any API call
     #[arg(long, global = true)]
     dry_run: bool,
+
+    /// Enable debug logging
+    #[arg(long, global = true, hide = true)]
+    debug: bool,
 }
 
 #[derive(Subcommand)]
@@ -42,6 +57,7 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    set_debug(cli.debug);
     check_for_update();
     match cli.command {
         None | Some(Command::New { .. }) => wizard::run(cli.dry_run),
@@ -76,9 +92,10 @@ fn run_config() -> Result<()> {
     println!();
     let (token, _) = vault::prompt_and_save_github_token()?;
 
-    // Validate
+    // Validate token
     let client = github::client::GithubClient::new(&token);
     print!("  Validating token... ");
+    client.validate_scopes()?;
     let user = github::repo::get_user(&client)?;
     println!("ok  ({})", user.login);
 

@@ -136,6 +136,32 @@ fn check_file_exists(client: &GithubClient, owner: &str, repo: &str, path: &str)
     }
 }
 
+/// Detect which template a repo was scaffolded from by its marker files and
+/// return the secrets those templates declare. Unlike the wizard (which knows the
+/// chosen template), `apply` runs against an existing repo, so we infer it from
+/// language marker files. Secrets are de-duplicated by name across matches.
+fn detect_template_secrets(
+    client: &GithubClient,
+    owner: &str,
+    repo: &str,
+) -> Vec<crate::templates::SecretSpec> {
+    const MARKERS: &[(&str, &[&str])] = &[
+        ("Cargo.toml", &["rust"]),
+        ("pyproject.toml", &["python-fastapi", "python-module"]),
+    ];
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    MARKERS
+        .iter()
+        .filter(|(marker, _)| check_file_exists(client, owner, repo, marker).unwrap_or(false))
+        .flat_map(|(_, langs)| {
+            langs
+                .iter()
+                .flat_map(|lang| crate::templates::load_secrets(lang))
+        })
+        .filter(|spec| seen.insert(spec.name.clone()))
+        .collect()
+}
+
 /// Sync labels idempotently - create missing, update existing
 pub fn sync_labels(
     client: &GithubClient,
@@ -409,8 +435,8 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
         }
     }
 
-    // 6. Secrets from template
-    let secret_specs = crate::templates::load_secrets("rust");
+    // 6. Secrets from template (detected from the repo's marker files)
+    let secret_specs = detect_template_secrets(&client, &owner, &repo_name);
     if !secret_specs.is_empty() {
         let existing = secrets::list_secret_names(&client, &owner, &repo_name).unwrap_or_default();
         let missing: Vec<_> = secret_specs
@@ -425,48 +451,16 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
             }
             println!();
             for spec in missing {
-                if let Some(val) = crate::vault::resolve_secret(&spec.name, &passphrase)? {
+                let value =
+                    if let Some(val) = crate::vault::resolve_secret(&spec.name, &passphrase)? {
+                        Some(val)
+                    } else {
+                        crate::wizard::prompt_secret_value(spec, &passphrase)?
+                    };
+                if let Some(val) = value {
                     match secrets::set_secret(&client, &owner, &repo_name, &spec.name, &val) {
-                        Ok(()) => {
-                            println!(
-                                "  ✓ Secret {} configured (from vault/environment)",
-                                spec.name
-                            )
-                        }
+                        Ok(()) => println!("  ✓ Secret {} configured", spec.name),
                         Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
-                    }
-                } else {
-                    let ans =
-                        inquire::Password::new(&format!("Secret {} (enter to skip):", spec.name))
-                            .with_help_message(&spec.description)
-                            .without_confirmation()
-                            .prompt_skippable()?;
-                    match ans.as_deref() {
-                        Some(v) if !v.is_empty() => {
-                            let save_it = inquire::Confirm::new(
-                                "  Save this secret in the vault for future use?",
-                            )
-                            .with_default(true)
-                            .prompt()
-                            .unwrap_or(false);
-                            if save_it {
-                                if let Err(e) =
-                                    crate::vault::save_secret(&spec.name, v, &passphrase)
-                                {
-                                    println!("  ⚠ Could not save to vault: {e}");
-                                } else {
-                                    println!("  \x1b[32m✓\x1b[0m Secret saved to vault");
-                                }
-                            }
-                            match secrets::set_secret(&client, &owner, &repo_name, &spec.name, v) {
-                                Ok(()) => println!("  ✓ Secret {} configured", spec.name),
-                                Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
-                            }
-                        }
-                        _ => println!(
-                            "  ⚠ Secret {} skipped — re-run `ghscaff apply` to set it later",
-                            spec.name
-                        ),
                     }
                 }
             }
