@@ -57,7 +57,12 @@ pub fn apply_branch_protection(
         required_status_checks: RequiredChecks<'a>,
         enforce_admins: bool,
         required_pull_request_reviews: Reviews,
-        restrictions: Restrictions,
+        // `restrictions` (push restrictions by users/teams/apps) is ONLY valid for
+        // organization-owned repos. Sending an object — even with empty arrays — on a
+        // user-owned repo returns a permanent 422 "Validation Failed". The field is
+        // required but nullable, so we always send `null`: ghscaff never configures any
+        // push restrictions, and `null` is accepted by both user- and org-owned repos.
+        restrictions: Option<()>,
         allow_force_pushes: bool,
     }
     #[derive(Serialize)]
@@ -70,12 +75,6 @@ pub fn apply_branch_protection(
         dismiss_stale_reviews: bool,
         required_approving_review_count: u8,
     }
-    #[derive(Serialize)]
-    struct Restrictions {
-        users: Vec<String>,
-        teams: Vec<String>,
-        apps: Vec<String>,
-    }
 
     let body = Body {
         required_status_checks: RequiredChecks {
@@ -87,16 +86,62 @@ pub fn apply_branch_protection(
             dismiss_stale_reviews: true,
             required_approving_review_count: 1,
         },
-        restrictions: Restrictions {
-            users: vec![],
-            teams: vec![],
-            apps: vec![],
-        },
+        restrictions: None,
         allow_force_pushes: false,
     };
-    let _: serde_json::Value = client.put(
+
+    // Wait for branch to be indexed by GitHub (up to 10 seconds)
+    let mut wait = std::time::Duration::from_millis(500);
+    for attempt in 0..5 {
+        if crate::is_debug() {
+            eprintln!(
+                "  [debug] Checking branch {} exists (attempt {}/{})",
+                branch,
+                attempt + 1,
+                5
+            );
+        }
+        match get_branch_sha(client, owner, repo, branch) {
+            Ok(sha) => {
+                if crate::is_debug() {
+                    eprintln!("  [debug] Branch {} found: {}", branch, sha);
+                }
+                break;
+            }
+            Err(e) if attempt < 4 => {
+                if crate::is_debug() {
+                    eprintln!(
+                        "  [debug] Branch {} not found yet: {}, waiting {:?}",
+                        branch, e, wait
+                    );
+                }
+                std::thread::sleep(wait);
+                wait *= 2;
+            }
+            Err(e) => {
+                if crate::is_debug() {
+                    eprintln!(
+                        "  [debug] Branch {} check failed after 5 attempts: {}",
+                        branch, e
+                    );
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    if crate::is_debug() {
+        eprintln!("  [debug] Applying branch protection to {}", branch);
+    }
+    client.put::<_, serde_json::Value>(
         &format!("/repos/{owner}/{repo}/branches/{branch}/protection"),
         &body,
     )?;
+    if crate::is_debug() {
+        eprintln!(
+            "  [debug] Branch protection applied successfully to {}",
+            branch
+        );
+    }
     Ok(())
 }

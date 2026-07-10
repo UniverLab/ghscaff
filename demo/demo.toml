@@ -1,0 +1,249 @@
+[demo]
+name = "demo"
+output_dir = "./dist"
+prompt = '\[\e[1;32m\]ghScaff@univerlab\[\e[0m\]:\[\e[1;34m\]~\[\e[0m\]$ '
+
+[typing]
+base_ms = 80
+salt_ms = 15
+
+[[sources]]
+id = "main"
+type = "terminal"
+
+[[sources]]
+id = "github"
+type = "browser"
+url = "https://github.com/jheisonmb/demo-ghscaff"
+theme = "dark"
+
+[layout]
+width = 1440
+height = 1080
+fps = 15
+line_height = 1.2000000476837158
+background = "#0b0f14"
+font_family = "IBM Plex Mono"
+
+[[layout.panes]]
+id = "main"
+type = "terminal"
+x = 0
+y = 0
+width = 1440
+height = 1080
+font_family = "monospace"
+font_size = 16
+
+[[layout.panes]]
+id = "github-r1"
+type = "browser"
+x = 0
+y = 0
+width = 1440
+height = 1080
+url = "https://github.com/jheisonmb/demo-ghscaff"
+theme = "dark"
+reveal_at = 82.104
+
+[[timeline]]
+action = "focus"
+pane = "main"
+
+[[timeline]]
+action = "type"
+text = "ghscaff"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 2500
+
+[[timeline]]
+action = "secret"
+prompt = "Vault passphrase:"
+
+[[timeline]]
+action = "type"
+text = "demo-ghscaff"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1498
+
+[[timeline]]
+action = "type"
+text = "a demo repository"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 574
+
+[[timeline]]
+action = "type"
+text = "demo,ghscaff,temp"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1568
+
+[[timeline]]
+action = "keypress"
+key = "down"
+
+[[timeline]]
+action = "wait"
+duration_ms = 207
+
+[[timeline]]
+action = "keypress"
+key = "down"
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 2225
+
+[[timeline]]
+action = "type"
+text = "y"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 2101
+
+[[timeline]]
+action = "type"
+text = "y"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait_for_quiet"
+quiet_ms = 500
+
+[[timeline]]
+action = "type"
+text = "n"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait_for_quiet"
+quiet_ms = 1500
+
+[[timeline]]
+action = "focus"
+pane = "github-r1"
+
+[[timeline]]
+action = "wait"
+duration_ms = 4000
+
+[[timeline]]
+action = "terminate"

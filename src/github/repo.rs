@@ -71,6 +71,18 @@ pub fn get_gitignore_template(client: &GithubClient, name: &str) -> Result<Strin
     Ok(t.source)
 }
 
+/// Fetch the full license text from GitHub's license API (e.g. key "mit",
+/// "apache-2.0", "gpl-3.0"). The body carries placeholders like `[year]` and
+/// `[fullname]` that the caller fills in.
+pub fn get_license_template(client: &GithubClient, key: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct License {
+        body: String,
+    }
+    let l: License = client.get(&format!("/licenses/{key}"))?;
+    Ok(l.body)
+}
+
 pub fn get_repo(client: &GithubClient, owner: &str, name: &str) -> Result<Repo> {
     client.get(&format!("/repos/{owner}/{name}"))
 }

@@ -9,7 +9,7 @@
  ░░░░░███░░░░ ░░░░░  ░░░░░░░░░   ░░░░░░   ░░░░░░░░  ░░░░░      ░░░░░     
  ███ ░███                                                                
 ░░██████                                                                 
- ░░░░░░                                                                   
+ ░░░░░░                                                                  
 ```
 
 <p align="center">
@@ -23,7 +23,7 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 
 ---
 
-![Demo](assets/demo.gif)
+![Demo](demo/dist/demo.gif)
 
 ---
 
@@ -120,6 +120,12 @@ ghscaff --dry-run
 # Reconfigure credentials
 ghscaff config
 ```
+
+## Documentation
+
+Full documentation lives in [`docs/`](docs/): installation, quick start,
+authentication and the encrypted vault, the wizard, apply mode, templates
+& conventions, and the complete CLI reference.
 
 ---
 
@@ -282,4 +288,5 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ---
 
-Made with ❤️ by [JheisonMB](https://github.com/JheisonMB) and [UniverLab](https://github.com/UniverLab)
+An experiment of [UniverLab](https://github.com/UniverLab) — an open computational laboratory.
+Made with ❤️ by [JheisonMB](https://github.com/JheisonMB)

@@ -116,7 +116,17 @@ fn collect_team_access(client: &GithubClient, _org: &str) -> Result<Vec<teams::T
 
 fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig> {
     // Step 1 — Repository basics
-    let name = Text::new("Repository name:").prompt()?;
+    let name = Text::new("Repository name:")
+        .with_validator(|input: &str| {
+            if input.trim().is_empty() {
+                Ok(inquire::validator::Validation::Invalid(
+                    "Repository name cannot be empty".into(),
+                ))
+            } else {
+                Ok(inquire::validator::Validation::Valid)
+            }
+        })
+        .prompt()?;
     let description = Text::new("Description:").with_default("").prompt()?;
     let topics_raw = Text::new("Topics:")
         .with_default("")
@@ -156,16 +166,17 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         vec![]
     };
 
-    // Step 3 — Language
-    let mut lang_options: Vec<&str> = templates::AVAILABLE.to_vec();
-    lang_options.push("none");
+    // Step 3 — Language. Read the live list from the boilerplate repo so new
+    // templates appear without a new ghscaff release.
+    let mut lang_options: Vec<String> = templates::available(client);
+    lang_options.push("none".to_string());
     let lang_choice = Select::new("Template:", lang_options)
         .with_help_message("Drives .gitignore, CI workflow, and boilerplate. 'none' = empty repo")
         .prompt()?;
     let language = if lang_choice == "none" {
         None
     } else {
-        Some(lang_choice.to_string())
+        Some(lang_choice)
     };
 
     // Step 4 — Branches
@@ -297,12 +308,16 @@ fn execute(
         });
     }
 
-    // LICENSE (placeholder — user replaces it or CI generates it)
+    // LICENSE — full text from GitHub's license API, with copyright placeholders
+    // filled in (owner + current year). MIT uses [year]/[fullname]; the Apache
+    // and GPL appendices use [yyyy]/[name of copyright owner].
     if let Some(lic) = &c.license {
-        let license_text = format!(
-            "# {} License\n\nSee https://opensource.org/licenses/{} for the full license text.\n",
-            lic, lic
-        );
+        let year = current_year();
+        let license_text = repo::get_license_template(client, &lic.to_lowercase())?
+            .replace("[year]", &year)
+            .replace("[yyyy]", &year)
+            .replace("[fullname]", owner)
+            .replace("[name of copyright owner]", owner);
         init_files.push(contents::TreeFile {
             path: "LICENSE".into(),
             content: license_text,
@@ -405,30 +420,7 @@ fn execute(
             println!("  ◆ Secret {}: found", spec.name);
             Some(val)
         } else {
-            let ans = Password::new(&format!("Secret {} (enter to skip):", spec.name))
-                .with_help_message(&spec.description)
-                .without_confirmation()
-                .prompt_skippable()?;
-            match ans.as_deref() {
-                Some(v) if !v.is_empty() => {
-                    let save_it = Confirm::new("  Save this secret in the vault for future use?")
-                        .with_default(true)
-                        .prompt()
-                        .unwrap_or(false);
-                    if save_it {
-                        crate::vault::save_secret(&spec.name, v, passphrase)?;
-                        println!("  \x1b[32m✓\x1b[0m Secret saved to vault");
-                    }
-                    Some(v.to_string())
-                }
-                _ => {
-                    println!(
-                        "  ⚠ Secret {} not configured — re-run `ghscaff apply` to set it later",
-                        spec.name
-                    );
-                    None
-                }
-            }
+            prompt_secret_value(spec, passphrase)?
         };
         if let Some(val) = value {
             step!(&format!("configure secret {}", spec.name), {
@@ -521,6 +513,76 @@ fn install_gitkit() {
     }
 }
 
+/// Prompt the user for a template secret that wasn't found in env/vault.
+///
+/// A required secret re-prompts on an empty entry instead of silently skipping —
+/// this both enforces the requirement and defends against a stray buffered newline
+/// (left over from earlier prompts) auto-submitting an empty value before the user
+/// can type. Skipping a required secret takes an explicit confirmation. An explicit
+/// cancel (ESC) or a non-interactive stdin returns `None` without looping.
+pub(crate) fn prompt_secret_value(
+    spec: &templates::SecretSpec,
+    passphrase: &str,
+) -> Result<Option<String>> {
+    let skipped = || {
+        println!(
+            "  ⚠ Secret {} not configured — re-run `ghscaff apply` to set it later",
+            spec.name
+        );
+    };
+    loop {
+        let ans = Password::new(&format!("Secret {}:", spec.name))
+            .with_help_message(&spec.description)
+            .without_confirmation()
+            .prompt_skippable()?;
+        match ans.as_deref() {
+            Some(v) if !v.is_empty() => {
+                let save_it = Confirm::new("  Save this secret in the vault for future use?")
+                    .with_default(true)
+                    .prompt()
+                    .unwrap_or(false);
+                if save_it {
+                    crate::vault::save_secret(&spec.name, v, passphrase)?;
+                    println!("  \x1b[32m✓\x1b[0m Secret saved to vault");
+                }
+                return Ok(Some(v.to_string()));
+            }
+            // Empty entry on a required secret — likely an accidental/auto-submitted
+            // skip. Ask for explicit intent; re-prompt unless the user confirms skip.
+            Some(_) if spec.required => {
+                let skip = Confirm::new(&format!(
+                    "  Secret {} is required by this template. Skip and set it later?",
+                    spec.name
+                ))
+                .with_default(false)
+                .prompt()
+                .unwrap_or(false);
+                if skip {
+                    skipped();
+                    return Ok(None);
+                }
+                // otherwise loop and prompt again
+            }
+            // Explicit cancel (None) or an empty optional secret — skip without looping.
+            _ => {
+                skipped();
+                return Ok(None);
+            }
+        }
+    }
+}
+
+/// Current calendar year as a string, for the LICENSE copyright line. Uses the
+/// average Gregorian year length — accurate to the day, which is fine here and
+/// avoids pulling in a date crate.
+fn current_year() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    (1970 + secs / 31_556_952).to_string()
+}
+
 fn count_steps(c: &WizardConfig, secrets: &[templates::SecretSpec]) -> usize {
     let mut n = 1; // create repo
     let has_files = c.language.is_some() || c.license.is_some();
@@ -546,6 +608,12 @@ fn count_steps(c: &WizardConfig, secrets: &[templates::SecretSpec]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_current_year_is_sane() {
+        let year: u64 = current_year().parse().expect("year should be numeric");
+        assert!((2024..=2100).contains(&year), "unexpected year: {year}");
+    }
 
     #[test]
     fn test_wizard_config_with_team_access() {
