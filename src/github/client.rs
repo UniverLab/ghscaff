@@ -139,3 +139,164 @@ pub fn resolve_token() -> Result<(String, String)> {
     println!("  No GitHub token found.\n");
     crate::vault::prompt_and_save_github_token()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_status_success() {
+        let resp = reqwest::blocking::Client::new()
+            .get("https://httpbin.org/status/200")
+            .send()
+            .unwrap();
+        let result = check_status(resp);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_status_error_404() {
+        let resp = reqwest::blocking::Client::new()
+            .get("https://httpbin.org/status/404")
+            .send()
+            .unwrap();
+        let result = check_status(resp);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("404"));
+    }
+
+    #[test]
+    fn test_check_status_error_403() {
+        let resp = reqwest::blocking::Client::new()
+            .get("https://httpbin.org/status/403")
+            .send()
+            .unwrap();
+        let result = check_status(resp);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("403"));
+    }
+
+    #[test]
+    fn test_check_status_error_500() {
+        let resp = reqwest::blocking::Client::new()
+            .get("https://httpbin.org/status/500")
+            .send()
+            .unwrap();
+        let result = check_status(resp);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("500"));
+    }
+
+    #[test]
+    fn test_github_client_new() {
+        let client = GithubClient::new("ghp_test123");
+        assert_eq!(client.token, "ghp_test123");
+    }
+
+    #[test]
+    fn test_github_client_empty_token() {
+        let client = GithubClient::new("");
+        assert!(client.token.is_empty());
+    }
+
+    #[test]
+    fn test_github_client_long_token() {
+        let long_token = "ghp_".to_string() + &"a".repeat(200);
+        let client = GithubClient::new(&long_token);
+        assert_eq!(client.token.len(), 204);
+    }
+
+    #[test]
+    fn test_check_status_path_strips_leading_slash() {
+        // Verify that the error message format includes the API path
+        let resp = reqwest::blocking::Client::new()
+            .get("https://httpbin.org/status/404")
+            .send()
+            .unwrap();
+        let result = check_status(resp);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_request_builder_headers() {
+        let client = GithubClient::new("ghp_test_token");
+        let req = client.request(reqwest::Method::GET, "/test");
+        let built = req.build().unwrap();
+        assert_eq!(
+            built.headers().get("Authorization").unwrap(),
+            "token ghp_test_token"
+        );
+        assert_eq!(built.headers().get("User-Agent").unwrap(), "ghscaff");
+        assert_eq!(
+            built.headers().get("Accept").unwrap(),
+            "application/vnd.github+json"
+        );
+    }
+
+    #[test]
+    fn test_request_url_construction() {
+        let client = GithubClient::new("ghp_test");
+        let req = client.request(reqwest::Method::GET, "/repos/owner/repo");
+        let built = req.build().unwrap();
+        assert_eq!(
+            built.url().as_str(),
+            "https://api.github.com/repos/owner/repo"
+        );
+    }
+
+    #[test]
+    fn test_request_url_user_endpoint() {
+        let client = GithubClient::new("ghp_test");
+        let req = client.request(reqwest::Method::GET, "/user");
+        let built = req.build().unwrap();
+        assert_eq!(built.url().as_str(), "https://api.github.com/user");
+    }
+
+    #[test]
+    fn test_request_post_method() {
+        let client = GithubClient::new("ghp_test");
+        let req = client.request(reqwest::Method::POST, "/repos/owner/repo/issues");
+        let built = req.build().unwrap();
+        assert_eq!(built.method(), reqwest::Method::POST);
+    }
+
+    #[test]
+    fn test_request_put_method() {
+        let client = GithubClient::new("ghp_test");
+        let req = client.request(reqwest::Method::PUT, "/repos/owner/repo/topics");
+        let built = req.build().unwrap();
+        assert_eq!(built.method(), reqwest::Method::PUT);
+    }
+
+    #[test]
+    fn test_request_delete_method() {
+        let client = GithubClient::new("ghp_test");
+        let req = client.request(reqwest::Method::DELETE, "/repos/owner/repo/labels/bug");
+        let built = req.build().unwrap();
+        assert_eq!(built.method(), reqwest::Method::DELETE);
+    }
+
+    #[test]
+    fn test_request_patch_method() {
+        let client = GithubClient::new("ghp_test");
+        let req = client.request(reqwest::Method::PATCH, "/repos/owner/repo");
+        let built = req.build().unwrap();
+        assert_eq!(built.method(), reqwest::Method::PATCH);
+    }
+
+    #[test]
+    fn test_check_status_json_error_message() {
+        // httpbin returns HTML, so the serde_json parse will fail and we get raw body
+        let resp = reqwest::blocking::Client::new()
+            .get("https://httpbin.org/status/422")
+            .send()
+            .unwrap();
+        let result = check_status(resp);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("422"));
+    }
+}

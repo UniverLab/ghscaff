@@ -161,6 +161,113 @@ fn is_newer(current: &str, latest: &str) -> bool {
     parse(latest) > parse(current)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_newer_major_version() {
+        assert!(is_newer("v0.5.0", "v1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_minor_version() {
+        assert!(is_newer("v0.5.0", "v0.6.0"));
+    }
+
+    #[test]
+    fn test_is_newer_patch_version() {
+        assert!(is_newer("v0.5.0", "v0.5.1"));
+    }
+
+    #[test]
+    fn test_is_newer_same_version() {
+        assert!(!is_newer("v0.5.0", "v0.5.0"));
+    }
+
+    #[test]
+    fn test_is_newer_older() {
+        assert!(!is_newer("v1.0.0", "v0.9.0"));
+    }
+
+    #[test]
+    fn test_is_newer_without_v_prefix() {
+        assert!(is_newer("0.5.0", "0.6.0"));
+    }
+
+    #[test]
+    fn test_is_newer_mixed_prefix() {
+        assert!(is_newer("v0.5.0", "1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_major_only() {
+        assert!(is_newer("v1.0.0", "v2.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_minor_only() {
+        assert!(!is_newer("v2.0.0", "v1.9.0"));
+    }
+
+    #[test]
+    fn test_is_newer_patch_bumps_not_enough() {
+        assert!(!is_newer("v1.0.1", "v1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_zero_versions() {
+        assert!(!is_newer("v0.0.0", "v0.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_large_numbers() {
+        assert!(is_newer("v0.0.1", "v99.99.99"));
+    }
+
+    #[test]
+    fn test_is_newer_incomplete_version_latest() {
+        // Latest has only major, current has full
+        assert!(is_newer("v0.5.0", "v1"));
+    }
+
+    #[test]
+    fn test_is_newer_incomplete_version_current() {
+        // Current has only major, latest has full
+        assert!(!is_newer("v1", "v1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_both_incomplete() {
+        assert!(!is_newer("v1", "v1"));
+    }
+
+    #[test]
+    fn test_is_newer_invalid_input() {
+        // Non-numeric parts should be treated as 0
+        assert!(!is_newer("abc", "xyz"));
+    }
+
+    #[test]
+    fn test_debug_mode_default() {
+        assert!(!is_debug());
+    }
+
+    #[test]
+    fn test_set_debug_enable() {
+        set_debug(true);
+        assert!(is_debug());
+        set_debug(false); // restore
+    }
+
+    #[test]
+    fn test_set_debug_disable() {
+        set_debug(true);
+        set_debug(false);
+        assert!(!is_debug());
+    }
+}
+
 fn run_installer() {
     #[cfg(target_os = "windows")]
     {
