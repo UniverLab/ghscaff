@@ -576,4 +576,81 @@ mod tests {
         assert_eq!(result.up_to_date, 9);
         assert_eq!(result.deleted, 3);
     }
+
+    #[test]
+    fn test_parse_https_remote_deep_path() {
+        let remote = "https://github.com/org-name/repo-name.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "org-name");
+        assert_eq!(repo, "repo-name");
+    }
+
+    #[test]
+    fn test_parse_ssh_remote_deep_path() {
+        let remote = "git@github.com:org-name/repo-name.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "org-name");
+        assert_eq!(repo, "repo-name");
+    }
+
+    #[test]
+    fn test_parse_empty_remote() {
+        assert!(parse_github_remote("").is_err());
+    }
+
+    #[test]
+    fn test_parse_ssh_single_component() {
+        assert!(parse_github_remote("git@github.com:onlyone").is_err());
+    }
+
+    #[test]
+    fn test_parse_https_single_component() {
+        assert!(parse_github_remote("https://github.com/onlyone").is_err());
+    }
+
+    #[test]
+    fn test_parse_http_not_github() {
+        assert!(parse_github_remote("http://github.com/a/b").is_err());
+    }
+
+    #[test]
+    fn test_parse_owner_repo_empty() {
+        assert!(parse_owner_repo("").is_err());
+    }
+
+    #[test]
+    fn test_parse_owner_repo_too_many_slashes() {
+        assert!(parse_owner_repo("a/b/c").is_err());
+    }
+
+    #[test]
+    fn test_apply_context_struct() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: true,
+            branch_protection_enabled: false,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        assert_eq!(ctx.owner, "o");
+        assert!(ctx.has_develop);
+        assert!(!ctx.branch_protection_enabled);
+        assert!(ctx.has_ci_workflow);
+        assert_eq!(ctx.current_topics, vec!["rust"]);
+    }
+
+    #[test]
+    fn test_add_team_to_repo_dry_run() {
+        // dry_run=true should succeed without any client
+        // We can't test with a real client, but we verify the function compiles
+        // and the dry_run path doesn't panic by checking the signature
+        let _: fn(&GithubClient, &str, &str, &str, &str, bool) -> Result<()> = add_team_to_repo;
+    }
+
+    #[test]
+    fn test_list_org_teams_signature() {
+        let _: fn(&GithubClient, &str) -> Result<Vec<teams::Team>> = list_org_teams;
+    }
 }

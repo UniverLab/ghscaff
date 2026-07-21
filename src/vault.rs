@@ -10,7 +10,7 @@ const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
 const DOMAIN_SEPARATOR: &[u8] = b"|ghscaff-vault-v1";
 
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 pub struct VaultData {
     #[serde(default)]
     pub github_token: Option<String>,
@@ -371,5 +371,48 @@ mod tests {
 
         let loaded = load_from_path("", &path).unwrap().unwrap();
         assert_eq!(loaded.github_token.unwrap(), "token_v2");
+    }
+
+    #[test]
+    fn vault_data_with_secrets() {
+        let mut secrets = std::collections::HashMap::new();
+        secrets.insert("API_KEY".to_string(), "abc123".to_string());
+        let data = VaultData {
+            github_token: Some("tok".into()),
+            has_passphrase: true,
+            secrets,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "pass", &path).unwrap();
+        let loaded = load_from_path("pass", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.get("API_KEY").unwrap(), "abc123");
+        assert!(loaded.has_passphrase);
+    }
+
+    #[test]
+    fn vault_data_serialization_roundtrip_json() {
+        let data = VaultData {
+            github_token: Some("tok".into()),
+            has_passphrase: false,
+            secrets: std::collections::HashMap::from([
+                ("A".into(), "1".into()),
+                ("B".into(), "2".into()),
+            ]),
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        let restored: VaultData = serde_json::from_str(&json).unwrap();
+        assert_eq!(data, restored);
+    }
+
+    #[test]
+    fn vault_data_equality() {
+        let a = VaultData {
+            github_token: Some("t".into()),
+            has_passphrase: true,
+            secrets: std::collections::HashMap::new(),
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
     }
 }

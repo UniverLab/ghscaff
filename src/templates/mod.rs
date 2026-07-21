@@ -319,4 +319,117 @@ mod tests {
         assert_eq!(file.path, "test.rs");
         assert_eq!(file.content, "fn main() {}");
     }
+
+    #[test]
+    fn test_apply_placeholders_replaces_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.rs");
+        std::fs::write(
+            &file,
+            "name={{name}} desc={{description}} author={{author}}",
+        )
+        .unwrap();
+        apply_placeholders(dir.path(), "myapp", "My App", "Alice").unwrap();
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "name=myapp desc=My App author=Alice");
+    }
+
+    #[test]
+    fn test_apply_placeholders_skips_binary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("image.png");
+        std::fs::write(&file, [0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+        apply_placeholders(dir.path(), "x", "y", "z").unwrap();
+        let bytes = std::fs::read(&file).unwrap();
+        assert_eq!(bytes, vec![0xFF, 0xD8, 0xFF, 0xE0]);
+    }
+
+    #[test]
+    fn test_apply_placeholders_no_change_when_no_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("readme.md");
+        std::fs::write(&file, "Hello World").unwrap();
+        let mtime_before = std::fs::metadata(&file).unwrap().modified().unwrap();
+        apply_placeholders(dir.path(), "a", "b", "c").unwrap();
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "Hello World");
+        // File should not have been rewritten
+        let mtime_after = std::fs::metadata(&file).unwrap().modified().unwrap();
+        assert_eq!(mtime_before, mtime_after);
+    }
+
+    #[test]
+    fn test_apply_placeholders_nested_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("src");
+        std::fs::create_dir(&sub).unwrap();
+        let file = sub.join("lib.rs");
+        std::fs::write(&file, "{{name}}").unwrap();
+        apply_placeholders(dir.path(), "project", "", "").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "project");
+    }
+
+    #[test]
+    fn test_default_true() {
+        assert!(default_true());
+    }
+
+    #[test]
+    fn test_secret_spec_deserialize() {
+        let toml_str = r#"
+        [[secrets]]
+        name = "API_KEY"
+        description = "GitHub API key"
+        required = true
+        "#;
+        let file: SecretsFile = toml::from_str(toml_str).unwrap();
+        assert_eq!(file.secrets.len(), 1);
+        assert_eq!(file.secrets[0].name, "API_KEY");
+        assert!(file.secrets[0].required);
+    }
+
+    #[test]
+    fn test_secret_spec_default_required() {
+        let toml_str = r#"
+        [[secrets]]
+        name = "TOKEN"
+        description = "A token"
+        "#;
+        let file: SecretsFile = toml::from_str(toml_str).unwrap();
+        assert!(file.secrets[0].required);
+    }
+
+    #[test]
+    fn test_load_secrets_missing_dir() {
+        let result = load_secrets("nonexistent-language-xyz");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_secret_spec_clone_debug() {
+        let spec = SecretSpec {
+            name: "X".into(),
+            description: "Y".into(),
+            required: false,
+        };
+        let cloned = spec.clone();
+        assert_eq!(cloned.name, "X");
+        assert!(!cloned.required);
+        let _dbg = format!("{:?}", spec);
+    }
+
+    #[test]
+    fn test_resolve_rust_template_files_content() {
+        let tmpl = RustTemplate;
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
+        let names: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(names.contains(&"Cargo.toml"));
+        assert!(names.contains(&"src/main.rs"));
+        assert!(names.contains(&"README.md"));
+    }
+
+    #[test]
+    fn test_available_constant() {
+        assert!(AVAILABLE.iter().all(|s| !s.is_empty()));
+    }
 }

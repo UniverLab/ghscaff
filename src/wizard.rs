@@ -786,4 +786,16 @@ mod tests {
         let steps = count_steps(&config, &secret_specs);
         assert_eq!(steps, 10);
     }
+
+    #[test]
+    fn test_is_command_available_existing() {
+        assert!(is_command_available("sh"));
+    }
+
+    #[test]
+    fn test_is_command_available_nonexistent() {
+        assert!(!is_command_available(
+            "definitely-not-a-real-command-xyz123"
+        ));
+    }
 }
