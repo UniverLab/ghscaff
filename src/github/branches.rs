@@ -170,10 +170,7 @@ mod tests {
             }
         }"#;
         let r: Ref = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            r.object.sha,
-            "6dcb09b5b57875f334f61aebed695e2e4193db5e"
-        );
+        assert_eq!(r.object.sha, "6dcb09b5b57875f334f61aebed695e2e4193db5e");
     }
 
     #[test]

@@ -219,7 +219,8 @@ mod tests {
 
     #[test]
     fn test_list_secret_names_from_json() {
-        let json = r#"{"total_count":3,"secrets":[{"name":"TOKEN"},{"name":"KEY"},{"name":"SECRET"}]}"#;
+        let json =
+            r#"{"total_count":3,"secrets":[{"name":"TOKEN"},{"name":"KEY"},{"name":"SECRET"}]}"#;
         let resp: SecretsListResponse = serde_json::from_str(json).unwrap();
         let names: Vec<String> = resp.secrets.into_iter().map(|s| s.name).collect();
         assert_eq!(names, vec!["TOKEN", "KEY", "SECRET"]);
@@ -233,10 +234,7 @@ mod tests {
         }"#;
         let resp: PublicKeyResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.key_id, "352845986");
-        assert_eq!(
-            resp.key,
-            "2Sg8iY4AOfKrV16708bPs5dJB9BvX7MA6P8BaQdNh58="
-        );
+        assert_eq!(resp.key, "2Sg8iY4AOfKrV16708bPs5dJB9BvX7MA6P8BaQdNh58=");
     }
 
     #[test]
