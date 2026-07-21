@@ -161,6 +161,34 @@ fn is_newer(current: &str, latest: &str) -> bool {
     parse(latest) > parse(current)
 }
 
+fn run_installer() {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("powershell")
+            .args([
+                "-Command",
+                "irm https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.ps1 | iex",
+            ])
+            .status();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        match std::process::Command::new("sh")
+            .args([
+                "-c",
+                "curl -fsSL https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.sh | sh",
+            ])
+            .status()
+        {
+            Ok(_) => {
+                println!("  \x1b[32m✓\x1b[0m Updated! Restart your terminal to use the new version.");
+                std::process::exit(0);
+            }
+            Err(e) => eprintln!("  ⚠ Installer failed: {e}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,13 +255,11 @@ mod tests {
 
     #[test]
     fn test_is_newer_incomplete_version_latest() {
-        // Latest has only major, current has full
         assert!(is_newer("v0.5.0", "v1"));
     }
 
     #[test]
     fn test_is_newer_incomplete_version_current() {
-        // Current has only major, latest has full
         assert!(!is_newer("v1", "v1.0.0"));
     }
 
@@ -244,7 +270,6 @@ mod tests {
 
     #[test]
     fn test_is_newer_invalid_input() {
-        // Non-numeric parts should be treated as 0
         assert!(!is_newer("abc", "xyz"));
     }
 
@@ -257,7 +282,7 @@ mod tests {
     fn test_set_debug_enable() {
         set_debug(true);
         assert!(is_debug());
-        set_debug(false); // restore
+        set_debug(false);
     }
 
     #[test]
@@ -265,33 +290,5 @@ mod tests {
         set_debug(true);
         set_debug(false);
         assert!(!is_debug());
-    }
-}
-
-fn run_installer() {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("powershell")
-            .args([
-                "-Command",
-                "irm https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.ps1 | iex",
-            ])
-            .status();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        match std::process::Command::new("sh")
-            .args([
-                "-c",
-                "curl -fsSL https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.sh | sh",
-            ])
-            .status()
-        {
-            Ok(_) => {
-                println!("  \x1b[32m✓\x1b[0m Updated! Restart your terminal to use the new version.");
-                std::process::exit(0);
-            }
-            Err(e) => eprintln!("  ⚠ Installer failed: {e}"),
-        }
     }
 }
