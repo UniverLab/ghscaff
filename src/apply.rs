@@ -653,4 +653,197 @@ mod tests {
     fn test_list_org_teams_signature() {
         let _: fn(&GithubClient, &str) -> Result<Vec<teams::Team>> = list_org_teams;
     }
+
+    #[test]
+    fn test_parse_ssh_with_different_host() {
+        // SSH but not github.com
+        let remote = "git@gitlab.com:owner/repo.git";
+        assert!(parse_github_remote(remote).is_err());
+    }
+
+    #[test]
+    fn test_parse_https_with_trailing_slash() {
+        let remote = "https://github.com/owner/repo/";
+        let result = parse_github_remote(remote);
+        // Trailing slash means split gives ["owner", "repo", ""] -> 3 parts but last is empty
+        assert!(result.is_ok());
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_with_hyphens() {
+        let (owner, repo) = parse_owner_repo("my-org/my-repo").unwrap();
+        assert_eq!(owner, "my-org");
+        assert_eq!(repo, "my-repo");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_with_underscores() {
+        let (owner, repo) = parse_owner_repo("my_org/my_repo").unwrap();
+        assert_eq!(owner, "my_org");
+        assert_eq!(repo, "my_repo");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_with_dots() {
+        let (owner, repo) = parse_owner_repo("org/my.repo").unwrap();
+        assert_eq!(owner, "org");
+        assert_eq!(repo, "my.repo");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_single_slash() {
+        let (owner, repo) = parse_owner_repo("/").unwrap();
+        assert_eq!(owner, "");
+        assert_eq!(repo, "");
+    }
+
+    #[test]
+    fn test_sync_result_all_zeros() {
+        let result = SyncResult {
+            created: 0,
+            updated: 0,
+            up_to_date: 0,
+            deleted: 0,
+        };
+        assert_eq!(result.created + result.updated + result.up_to_date + result.deleted, 0);
+    }
+
+    #[test]
+    fn test_sync_result_clone() {
+        let result = SyncResult {
+            created: 1,
+            updated: 2,
+            up_to_date: 3,
+            deleted: 4,
+        };
+        let cloned = result.clone();
+        assert_eq!(result.created, cloned.created);
+        assert_eq!(result.updated, cloned.updated);
+        assert_eq!(result.up_to_date, cloned.up_to_date);
+        assert_eq!(result.deleted, cloned.deleted);
+    }
+
+    #[test]
+    fn test_sync_result_debug() {
+        let result = SyncResult {
+            created: 1,
+            updated: 2,
+            up_to_date: 3,
+            deleted: 4,
+        };
+        let dbg = format!("{:?}", result);
+        assert!(dbg.contains("SyncResult"));
+    }
+
+    #[test]
+    fn test_apply_context_clone() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: false,
+            branch_protection_enabled: true,
+            has_ci_workflow: false,
+            current_topics: vec![],
+        };
+        let cloned = ctx.clone();
+        assert_eq!(ctx.owner, cloned.owner);
+        assert_eq!(ctx.repo, cloned.repo);
+        assert_eq!(ctx.has_develop, cloned.has_develop);
+        assert_eq!(ctx.branch_protection_enabled, cloned.branch_protection_enabled);
+        assert_eq!(ctx.has_ci_workflow, cloned.has_ci_workflow);
+    }
+
+    #[test]
+    fn test_apply_context_debug() {
+        let ctx = ApplyContext {
+            owner: "org".into(),
+            repo: "repo".into(),
+            current_labels: vec![],
+            has_develop: true,
+            branch_protection_enabled: false,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        let dbg = format!("{:?}", ctx);
+        assert!(dbg.contains("ApplyContext"));
+        assert!(dbg.contains("org"));
+        assert!(dbg.contains("repo"));
+    }
+
+    #[test]
+    fn test_apply_context_with_labels() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![
+                labels::Label {
+                    name: "bug".into(),
+                    color: "d73a4a".into(),
+                    description: "A bug".into(),
+                },
+                labels::Label {
+                    name: "feature".into(),
+                    color: "a2eeef".into(),
+                    description: "A feature".into(),
+                },
+            ],
+            has_develop: false,
+            branch_protection_enabled: false,
+            has_ci_workflow: false,
+            current_topics: vec![],
+        };
+        assert_eq!(ctx.current_labels.len(), 2);
+    }
+
+    #[test]
+    fn test_apply_context_multiple_topics() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: false,
+            branch_protection_enabled: false,
+            has_ci_workflow: false,
+            current_topics: vec![
+                "rust".into(),
+                "cli".into(),
+                "github".into(),
+                "scaffold".into(),
+            ],
+        };
+        assert_eq!(ctx.current_topics.len(), 4);
+    }
+
+    #[test]
+    fn test_parse_owner_repo_whiteSpace() {
+        assert!(parse_owner_repo("  ").is_err());
+    }
+
+    #[test]
+    fn test_parse_owner_repo_tabs() {
+        // Tabs are valid in split, so this actually parses as "a\t" and "\tb"
+        let result = parse_owner_repo("a\t/\tb");
+        assert!(result.is_ok());
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "a\t");
+        assert_eq!(repo, "\tb");
+    }
+
+    #[test]
+    fn test_parse_https_url_with_port() {
+        let remote = "https://github.com:8443/owner/repo.git";
+        // This is not a valid github HTTPS URL (port in URL)
+        assert!(parse_github_remote(remote).is_err());
+    }
+
+    #[test]
+    fn test_parse_ssh_port_in_host() {
+        let remote = "ssh://git@github.com/owner/repo.git";
+        // ssh:// prefix is not handled
+        assert!(parse_github_remote(remote).is_err());
+    }
 }

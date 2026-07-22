@@ -291,4 +291,84 @@ mod tests {
         set_debug(false);
         assert!(!is_debug());
     }
+
+    #[test]
+    fn test_is_newer_equal_major_minor() {
+        assert!(!is_newer("v1.2.3", "v1.2.3"));
+    }
+
+    #[test]
+    fn test_is_newer_patch_only_difference() {
+        assert!(is_newer("v1.2.0", "v1.2.1"));
+        assert!(!is_newer("v1.2.1", "v1.2.0"));
+    }
+
+    #[test]
+    fn test_is_newer_major_difference_overrides_minor() {
+        assert!(is_newer("v1.9.9", "v2.0.0"));
+        assert!(!is_newer("v2.0.0", "v1.9.9"));
+    }
+
+    #[test]
+    fn test_is_newer_minor_difference_overrides_patch() {
+        assert!(is_newer("v1.1.9", "v1.2.0"));
+        assert!(!is_newer("v1.2.0", "v1.1.9"));
+    }
+
+    #[test]
+    fn test_is_newer_leading_v_stripped() {
+        assert!(is_newer("v1.0.0", "v2.0.0"));
+        assert!(!is_newer("v2.0.0", "v1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_no_v_prefix() {
+        assert!(is_newer("1.0.0", "2.0.0"));
+        assert!(!is_newer("2.0.0", "1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_mixed_v_prefix() {
+        assert!(is_newer("v1.0.0", "2.0.0"));
+        assert!(is_newer("1.0.0", "v2.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_empty_strings() {
+        assert!(!is_newer("", ""));
+    }
+
+    #[test]
+    fn test_is_newer_single_number() {
+        assert!(is_newer("v1", "v2"));
+        assert!(!is_newer("v2", "v1"));
+    }
+
+    #[test]
+    fn test_is_newer_non_numeric_parts() {
+        assert!(!is_newer("vabc", "vdef"));
+    }
+
+    #[test]
+    fn test_is_newer_very_large_versions() {
+        assert!(is_newer("v999.999.999", "v1000.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_zero_vs_nonzero() {
+        assert!(is_newer("v0.0.0", "v0.0.1"));
+        assert!(!is_newer("v0.0.1", "v0.0.0"));
+    }
+
+    #[test]
+    fn test_debug_mode_toggle() {
+        set_debug(false);
+        assert!(!is_debug());
+        set_debug(true);
+        assert!(is_debug());
+        set_debug(true);
+        assert!(is_debug());
+        set_debug(false);
+        assert!(!is_debug());
+    }
 }

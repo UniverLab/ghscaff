@@ -452,4 +452,156 @@ mod tests {
         };
         assert_eq!(file.path, "docs/my file.md");
     }
+
+    #[test]
+    fn test_blob_body_empty_content() {
+        let body = BlobBody {
+            content: String::new(),
+            encoding: "utf-8".to_string(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"content\":\"\""));
+    }
+
+    #[test]
+    fn test_create_tree_body_single_file() {
+        let body = CreateTreeBody {
+            tree: vec![TreeItemBody {
+                path: "single.txt".to_string(),
+                mode: "100644".to_string(),
+                item_type: "blob".to_string(),
+                sha: "sha1".to_string(),
+            }],
+            base_tree: None,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"single.txt\""));
+        assert!(!json.contains("base_tree"));
+    }
+
+    #[test]
+    fn test_create_tree_body_many_files() {
+        let items: Vec<TreeItemBody> = (0..50)
+            .map(|i| TreeItemBody {
+                path: format!("file_{}.txt", i),
+                mode: "100644".to_string(),
+                item_type: "blob".to_string(),
+                sha: format!("sha_{}", i),
+            })
+            .collect();
+        let body = CreateTreeBody {
+            tree: items,
+            base_tree: None,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"file_0.txt\""));
+        assert!(json.contains("\"file_49.txt\""));
+    }
+
+    #[test]
+    fn test_commit_info_deserialize_full_github() {
+        let json = r#"{
+            "sha": "abc123",
+            "url": "https://api.github.com/repos/owner/repo/git/commits/abc123",
+            "author": {"name": "test", "email": "test@test.com", "date": "2024-01-01"},
+            "committer": {"name": "test", "email": "test@test.com", "date": "2024-01-01"},
+            "tree": {"sha": "tree456", "url": "https://api.github.com/repos/owner/repo/git/trees/tree456"},
+            "message": "init"
+        }"#;
+        let info: CommitInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.sha, "abc123");
+        assert_eq!(info.tree.unwrap().sha, "tree456");
+    }
+
+    #[test]
+    fn test_tree_response_full_github() {
+        let json = r#"{
+            "sha": "tree_sha_abc",
+            "url": "https://api.github.com/repos/owner/repo/git/trees/tree_sha_abc",
+            "truncated": false,
+            "tree": []
+        }"#;
+        let resp: TreeResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.sha, "tree_sha_abc");
+    }
+
+    #[test]
+    fn test_create_ref_body_tag() {
+        let body = CreateRefBody {
+            ref_name: "refs/tags/v1.0.0".to_string(),
+            sha: "tag_sha".to_string(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"ref\":\"refs/tags/v1.0.0\""));
+    }
+
+    #[test]
+    fn test_tree_item_body_symlink() {
+        let item = TreeItemBody {
+            path: "link".to_string(),
+            mode: "120000".to_string(),
+            item_type: "blob".to_string(),
+            sha: "symlink_sha".to_string(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("\"mode\":\"120000\""));
+    }
+
+    #[test]
+    fn test_tree_item_body_submodule() {
+        let item = TreeItemBody {
+            path: "vendor/lib".to_string(),
+            mode: "160000".to_string(),
+            item_type: "commit".to_string(),
+            sha: "commit_sha".to_string(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("\"type\":\"commit\""));
+        assert!(json.contains("\"mode\":\"160000\""));
+    }
+
+    #[test]
+    fn test_blob_response_deserialize_minimal() {
+        let json = r#"{"sha":"simple_sha"}"#;
+        let resp: BlobResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.sha, "simple_sha");
+    }
+
+    #[test]
+    fn test_commit_info_deserialize_empty_parents() {
+        let json = r#"{"sha":"first_commit","tree":{"sha":"t1"}}"#;
+        let info: CommitInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.sha, "first_commit");
+    }
+
+    #[test]
+    fn test_update_ref_body_various_shas() {
+        for sha in &["abc", "da39a3ee5e6b4b0d3255bfef95601890afd80709", "x"] {
+            let body = UpdateRefBody {
+                sha: sha.to_string(),
+                force: false,
+            };
+            let json = serde_json::to_string(&body).unwrap();
+            assert!(json.contains(&format!("\"sha\":\"{}\"", sha)));
+        }
+    }
+
+    #[test]
+    fn test_tree_file_unicode_content() {
+        let file = TreeFile {
+            path: "unicode.txt".to_string(),
+            content: "你好世界 🌍".to_string(),
+        };
+        assert!(file.content.contains("你好"));
+    }
+
+    #[test]
+    fn test_tree_file_long_path() {
+        let path = format!("src/{}/file.rs", "a/".repeat(10));
+        let file = TreeFile {
+            path,
+            content: "code".to_string(),
+        };
+        assert!(file.path.contains("a/"));
+    }
 }
