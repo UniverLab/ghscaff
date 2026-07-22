@@ -226,7 +226,10 @@ mod tests {
         let labels = standard_labels();
         for label in &labels {
             assert!(
-                label.color.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
+                label
+                    .color
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
                 "Color {} should be lowercase hex digits only",
                 label.color
             );

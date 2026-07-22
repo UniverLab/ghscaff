@@ -793,11 +793,7 @@ mod tests {
         let loaded = load_from_path("", &path).unwrap().unwrap();
         for c in 'a'..='z' {
             let key = format!("KEY_{}", c);
-            assert!(
-                loaded.secrets.contains_key(&key),
-                "Missing key: {}",
-                key
-            );
+            assert!(loaded.secrets.contains_key(&key), "Missing key: {}", key);
         }
     }
 
@@ -967,8 +963,7 @@ mod tests {
         // Load, insert secret, save back (simulating save_secret logic)
         let mut data = load_from_path("", &path).unwrap().unwrap();
         assert!(data.secrets.is_empty());
-        data.secrets
-            .insert("MY_TOKEN".into(), "token_value".into());
+        data.secrets.insert("MY_TOKEN".into(), "token_value".into());
         save_to_path(&data, "", &path).unwrap();
 
         let loaded = load_from_path("", &path).unwrap().unwrap();

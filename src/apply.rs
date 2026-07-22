@@ -708,7 +708,10 @@ mod tests {
             up_to_date: 0,
             deleted: 0,
         };
-        assert_eq!(result.created + result.updated + result.up_to_date + result.deleted, 0);
+        assert_eq!(
+            result.created + result.updated + result.up_to_date + result.deleted,
+            0
+        );
     }
 
     #[test]
@@ -753,7 +756,10 @@ mod tests {
         assert_eq!(ctx.owner, cloned.owner);
         assert_eq!(ctx.repo, cloned.repo);
         assert_eq!(ctx.has_develop, cloned.has_develop);
-        assert_eq!(ctx.branch_protection_enabled, cloned.branch_protection_enabled);
+        assert_eq!(
+            ctx.branch_protection_enabled,
+            cloned.branch_protection_enabled
+        );
         assert_eq!(ctx.has_ci_workflow, cloned.has_ci_workflow);
     }
 

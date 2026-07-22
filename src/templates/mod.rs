@@ -444,10 +444,7 @@ mod tests {
             "My App",
             "myorg",
         );
-        assert_eq!(
-            result,
-            "Hello myapp, welcome to My App by myorg/myapp"
-        );
+        assert_eq!(result, "Hello myapp, welcome to My App by myorg/myapp");
     }
 
     #[test]
@@ -523,9 +520,7 @@ mod tests {
         std::fs::write(cache.join(".gitignore"), "target/\n").unwrap();
         std::fs::write(cache.join("PLACEHOLDERS.md"), "docs").unwrap();
 
-        let tmpl = RemoteTemplate {
-            cache_dir: cache,
-        };
+        let tmpl = RemoteTemplate { cache_dir: cache };
         let files = tmpl.boilerplate_files("myrepo", "My description", "myorg");
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"Cargo.toml"));
@@ -542,9 +537,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("empty");
         std::fs::create_dir_all(&cache).unwrap();
-        let tmpl = RemoteTemplate {
-            cache_dir: cache,
-        };
+        let tmpl = RemoteTemplate { cache_dir: cache };
         let files = tmpl.boilerplate_files("repo", "desc", "owner");
         assert!(files.is_empty());
     }
@@ -558,9 +551,7 @@ mod tests {
         std::fs::write(cache.join("Cargo.toml"), "[package]\n").unwrap();
         std::fs::write(src_dir.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let tmpl = RemoteTemplate {
-            cache_dir: cache,
-        };
+        let tmpl = RemoteTemplate { cache_dir: cache };
         let files = tmpl.boilerplate_files("repo", "desc", "owner");
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"Cargo.toml"));
@@ -704,9 +695,7 @@ required = false
         // Binary file - read_to_string will fail, so it should be skipped
         std::fs::write(cache.join("binary.bin"), [0xFF, 0xFE, 0xFD]).unwrap();
 
-        let tmpl = RemoteTemplate {
-            cache_dir: cache,
-        };
+        let tmpl = RemoteTemplate { cache_dir: cache };
         let files = tmpl.boilerplate_files("repo", "desc", "owner");
         // Only text.txt should be included; binary.bin skipped
         assert_eq!(files.len(), 1);
@@ -788,8 +777,7 @@ required = false
         let tmpl = RemoteTemplate {
             cache_dir: tempfile::tempdir().unwrap().into_path(),
         };
-        let result =
-            tmpl.apply_placeholders("{{name}}", "my\"app", "desc", "owner");
+        let result = tmpl.apply_placeholders("{{name}}", "my\"app", "desc", "owner");
         assert_eq!(result, "my\"app");
     }
 
@@ -826,9 +814,7 @@ required = false
         std::fs::create_dir_all(&cache).unwrap();
         std::fs::write(cache.join("file.txt"), "original content {{name}}").unwrap();
 
-        let tmpl = RemoteTemplate {
-            cache_dir: cache,
-        };
+        let tmpl = RemoteTemplate { cache_dir: cache };
         let files = tmpl.boilerplate_files("replaced", "", "");
         assert_eq!(files[0].content, "original content replaced");
     }
@@ -842,7 +828,12 @@ required = false
     #[test]
     fn test_skip_files_all_present() {
         // Verify all skip files are checked
-        let skip = vec!["template.toml", "secrets.toml", "PLACEHOLDERS.md", ".gitignore"];
+        let skip = vec![
+            "template.toml",
+            "secrets.toml",
+            "PLACEHOLDERS.md",
+            ".gitignore",
+        ];
         for file in skip {
             assert!(
                 SKIP_FILES.contains(&file),
@@ -873,9 +864,7 @@ required = false
         std::fs::write(cache.join("a_first.txt"), "a").unwrap();
         std::fs::write(cache.join("m_middle.txt"), "m").unwrap();
 
-        let tmpl = RemoteTemplate {
-            cache_dir: cache,
-        };
+        let tmpl = RemoteTemplate { cache_dir: cache };
         let files = tmpl.boilerplate_files("repo", "desc", "owner");
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         let mut sorted = paths.clone();
