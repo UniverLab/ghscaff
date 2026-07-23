@@ -851,9 +851,7 @@ mod tests {
 
     #[test]
     fn test_check_status_path_preserved_in_error() {
-        let url = start_mock_server(|_path| {
-            (404, r#"{"message":"Not Found"}"#.to_string())
-        });
+        let url = start_mock_server(|_path| (404, r#"{"message":"Not Found"}"#.to_string()));
         let resp = reqwest::blocking::Client::new()
             .get(format!("{url}/repos/owner/repo/branches/main/protection"))
             .send()
