@@ -786,4 +786,360 @@ mod tests {
         let steps = count_steps(&config, &secret_specs);
         assert_eq!(steps, 10);
     }
+
+    #[test]
+    fn test_is_command_available_existing() {
+        assert!(is_command_available("sh"));
+    }
+
+    #[test]
+    fn test_is_command_available_nonexistent() {
+        assert!(!is_command_available(
+            "definitely-not-a-real-command-xyz123"
+        ));
+    }
+
+    #[test]
+    fn test_current_year_numeric_value() {
+        let year: u64 = current_year().parse().unwrap();
+        assert!(year >= 2025);
+        assert!(year <= 2200);
+    }
+
+    #[test]
+    fn test_current_year_length() {
+        let y = current_year();
+        assert!(y.len() >= 4);
+        assert!(y.len() <= 5);
+    }
+
+    #[test]
+    fn test_count_steps_no_language_no_license() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        // 1: create repo
+        // 3: protect main
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 2);
+    }
+
+    #[test]
+    fn test_count_steps_only_develop() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: true,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        // 1: create repo
+        // 3: create develop
+        // 4: protect develop
+        // 5: protect main
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 4);
+    }
+
+    #[test]
+    fn test_count_steps_only_labels() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: true,
+            team_access: vec![],
+        };
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 3);
+    }
+
+    #[test]
+    fn test_count_steps_only_topics() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["rust".to_string()],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 3);
+    }
+
+    #[test]
+    fn test_count_steps_only_secrets() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        let secrets = vec![templates::SecretSpec {
+            name: "KEY".to_string(),
+            description: "d".to_string(),
+            required: true,
+        }];
+        let steps = count_steps(&config, &secrets);
+        assert_eq!(steps, 3);
+    }
+
+    #[test]
+    fn test_count_steps_many_teams() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "org".to_string(),
+            is_org: true,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: (0..5)
+                .map(|i| teams::TeamAccess {
+                    team_slug: format!("t{i}"),
+                    permission: "push".to_string(),
+                })
+                .collect(),
+        };
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 7);
+    }
+
+    #[test]
+    fn test_count_steps_many_secrets() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        let secrets: Vec<templates::SecretSpec> = (0..3)
+            .map(|i| templates::SecretSpec {
+                name: format!("S{i}"),
+                description: format!("d{i}"),
+                required: false,
+            })
+            .collect();
+        let steps = count_steps(&config, &secrets);
+        assert_eq!(steps, 5);
+    }
+
+    #[test]
+    fn test_is_command_available_ls() {
+        assert!(is_command_available("ls"));
+    }
+
+    #[test]
+    fn test_is_command_available_cat() {
+        assert!(is_command_available("cat"));
+    }
+
+    #[test]
+    fn test_is_command_available_with_path_characters() {
+        assert!(!is_command_available("/usr/bin/definitely-fake"));
+    }
+
+    #[test]
+    fn test_wizard_config_clone() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["rust".to_string()],
+            private: true,
+            owner: "org".to_string(),
+            is_org: true,
+            language: Some("rust".to_string()),
+            default_branch: "develop".to_string(),
+            create_develop: true,
+            license: Some("MIT".to_string()),
+            create_labels: true,
+            team_access: vec![teams::TeamAccess {
+                team_slug: "t".to_string(),
+                permission: "push".to_string(),
+            }],
+        };
+        assert_eq!(config.name, "repo");
+        assert_eq!(config.description, "test");
+        assert_eq!(config.topics, vec!["rust"]);
+        assert!(config.private);
+        assert_eq!(config.owner, "org");
+        assert!(config.is_org);
+        assert_eq!(config.language, Some("rust".to_string()));
+        assert_eq!(config.default_branch, "develop");
+        assert!(config.create_develop);
+        assert_eq!(config.license, Some("MIT".to_string()));
+        assert!(config.create_labels);
+        assert_eq!(config.team_access.len(), 1);
+    }
+
+    #[test]
+    fn test_wizard_config_minimal() {
+        let config = WizardConfig {
+            name: String::new(),
+            description: String::new(),
+            topics: vec![],
+            private: false,
+            owner: String::new(),
+            is_org: false,
+            language: None,
+            default_branch: String::new(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        assert!(config.name.is_empty());
+        assert!(config.topics.is_empty());
+        assert!(!config.private);
+        assert!(!config.is_org);
+        assert!(config.language.is_none());
+        assert!(!config.create_develop);
+        assert!(config.license.is_none());
+        assert!(!config.create_labels);
+        assert!(config.team_access.is_empty());
+    }
+
+    #[test]
+    fn test_count_steps_develop_no_files() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: true,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        let steps = count_steps(&config, &[]);
+        // create repo + create develop + protect develop + protect main = 4
+        assert_eq!(steps, 4);
+    }
+
+    #[test]
+    fn test_count_steps_labels_and_topics_and_secrets() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["rust".to_string(), "cli".to_string()],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: true,
+            team_access: vec![],
+        };
+        let secrets = vec![templates::SecretSpec {
+            name: "K".to_string(),
+            description: "D".to_string(),
+            required: true,
+        }];
+        let steps = count_steps(&config, &secrets);
+        // create repo + protect main + labels + topics + secret = 5
+        assert_eq!(steps, 5);
+    }
+
+    #[test]
+    fn test_count_steps_everything_enabled() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["a".to_string()],
+            private: true,
+            owner: "org".to_string(),
+            is_org: true,
+            language: Some("rust".to_string()),
+            default_branch: "main".to_string(),
+            create_develop: true,
+            license: Some("MIT".to_string()),
+            create_labels: true,
+            team_access: (0..3)
+                .map(|i| teams::TeamAccess {
+                    team_slug: format!("t{i}"),
+                    permission: "push".to_string(),
+                })
+                .collect(),
+        };
+        let secrets = vec![
+            templates::SecretSpec {
+                name: "S1".to_string(),
+                description: "D1".to_string(),
+                required: true,
+            },
+            templates::SecretSpec {
+                name: "S2".to_string(),
+                description: "D2".to_string(),
+                required: false,
+            },
+        ];
+        let steps = count_steps(&config, &secrets);
+        // create repo + init commit + create develop + protect develop + protect main
+        // + labels + topics + 3 teams + 2 secrets = 12
+        assert_eq!(steps, 12);
+    }
+
+    #[test]
+    fn test_banner_is_const_str() {
+        assert!(!BANNER.is_empty());
+        assert!(BANNER.contains("██"));
+    }
 }

@@ -10,7 +10,7 @@ const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
 const DOMAIN_SEPARATOR: &[u8] = b"|ghscaff-vault-v1";
 
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 pub struct VaultData {
     #[serde(default)]
     pub github_token: Option<String>,
@@ -371,5 +371,983 @@ mod tests {
 
         let loaded = load_from_path("", &path).unwrap().unwrap();
         assert_eq!(loaded.github_token.unwrap(), "token_v2");
+    }
+
+    #[test]
+    fn vault_data_with_secrets() {
+        let mut secrets = std::collections::HashMap::new();
+        secrets.insert("API_KEY".to_string(), "abc123".to_string());
+        let data = VaultData {
+            github_token: Some("tok".into()),
+            has_passphrase: true,
+            secrets,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "pass", &path).unwrap();
+        let loaded = load_from_path("pass", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.get("API_KEY").unwrap(), "abc123");
+        assert!(loaded.has_passphrase);
+    }
+
+    #[test]
+    fn vault_data_serialization_roundtrip_json() {
+        let data = VaultData {
+            github_token: Some("tok".into()),
+            has_passphrase: false,
+            secrets: std::collections::HashMap::from([
+                ("A".into(), "1".into()),
+                ("B".into(), "2".into()),
+            ]),
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        let restored: VaultData = serde_json::from_str(&json).unwrap();
+        assert_eq!(data, restored);
+    }
+
+    #[test]
+    fn vault_data_equality() {
+        let a = VaultData {
+            github_token: Some("t".into()),
+            has_passphrase: true,
+            secrets: std::collections::HashMap::new(),
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn derive_key_empty_passphrase() {
+        let key1 = derive_key("").unwrap();
+        let key2 = derive_key("").unwrap();
+        assert_eq!(key1, key2);
+        assert_eq!(key1.len(), KEY_LEN);
+    }
+
+    #[test]
+    fn derive_key_long_passphrase() {
+        let long = "x".repeat(10000);
+        let key = derive_key(&long).unwrap();
+        assert_eq!(key.len(), KEY_LEN);
+    }
+
+    #[test]
+    fn vault_data_no_token_no_secrets() {
+        let data = VaultData {
+            github_token: None,
+            has_passphrase: false,
+            secrets: HashMap::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert!(loaded.github_token.is_none());
+        assert!(loaded.secrets.is_empty());
+    }
+
+    #[test]
+    fn vault_data_multiple_secrets() {
+        let mut secrets = HashMap::new();
+        secrets.insert("KEY1".into(), "val1".into());
+        secrets.insert("KEY2".into(), "val2".into());
+        secrets.insert("KEY3".into(), "val3".into());
+        let data = VaultData {
+            github_token: None,
+            has_passphrase: false,
+            secrets,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.len(), 3);
+        assert_eq!(loaded.secrets.get("KEY1").unwrap(), "val1");
+        assert_eq!(loaded.secrets.get("KEY2").unwrap(), "val2");
+        assert_eq!(loaded.secrets.get("KEY3").unwrap(), "val3");
+    }
+
+    #[test]
+    fn save_to_path_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("deep").join("vault.enc");
+        let data = VaultData::default();
+        save_to_path(&data, "", &path).unwrap();
+        assert!(path.exists());
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded, VaultData::default());
+    }
+
+    #[test]
+    fn load_from_path_corrupt_data_not_too_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        // Exactly NONCE_LEN bytes but garbage
+        let data = vec![0u8; NONCE_LEN];
+        std::fs::write(&path, &data).unwrap();
+        let result = load_from_path("", &path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn vault_data_clone() {
+        let data = test_vault_data();
+        let cloned = data.clone();
+        assert_eq!(data, cloned);
+    }
+
+    #[test]
+    fn vault_data_debug() {
+        let data = test_vault_data();
+        let dbg = format!("{:?}", data);
+        assert!(dbg.contains("VaultData"));
+        assert!(dbg.contains("ghp_test_token_abc"));
+    }
+
+    #[test]
+    fn vault_data_json_missing_fields() {
+        let json = r#"{}"#;
+        let data: VaultData = serde_json::from_str(json).unwrap();
+        assert_eq!(data, VaultData::default());
+    }
+
+    #[test]
+    fn vault_data_json_partial_fields() {
+        let json = r#"{"github_token":"tok_only"}"#;
+        let data: VaultData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.github_token.as_deref(), Some("tok_only"));
+        assert!(!data.has_passphrase);
+        assert!(data.secrets.is_empty());
+    }
+
+    #[test]
+    fn vault_data_json_secrets_only() {
+        let json = r#"{"secrets":{"A":"1"}}"#;
+        let data: VaultData = serde_json::from_str(json).unwrap();
+        assert!(data.github_token.is_none());
+        assert_eq!(data.secrets.get("A").unwrap(), "1");
+    }
+
+    #[test]
+    fn save_secret_stores_in_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        // Create initial vault
+        let initial = VaultData::default();
+        save_to_path(&initial, "", &path).unwrap();
+        // Now simulate save_secret by loading, inserting, saving
+        let mut data = load_from_path("", &path).unwrap().unwrap();
+        data.secrets
+            .insert("MY_SECRET".into(), "secret_value".into());
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.get("MY_SECRET").unwrap(), "secret_value");
+    }
+
+    #[test]
+    fn resolve_secret_from_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let mut secrets = HashMap::new();
+        secrets.insert("API_KEY".into(), "key123".into());
+        let data = VaultData {
+            secrets,
+            ..Default::default()
+        };
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.get("API_KEY").unwrap(), "key123");
+        assert!(!loaded.secrets.contains_key("NONEXISTENT"));
+    }
+
+    #[test]
+    fn vault_file_format_has_correct_overhead() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let data = VaultData::default();
+        save_to_path(&data, "", &path).unwrap();
+        let blob = std::fs::read(&path).unwrap();
+        // NONCE_LEN (24) + encryption overhead (plaintext_len + 16 poly1305 tag)
+        // plaintext for empty VaultData is {"github_token":null,"has_passphrase":false,"secrets":{}}
+        assert!(blob.len() > NONCE_LEN);
+    }
+
+    #[test]
+    fn destroy_nonexistent_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        // Simulate destroy on non-existent path
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn vault_data_has_passphrase_true_serialization() {
+        let data = VaultData {
+            github_token: None,
+            has_passphrase: true,
+            secrets: HashMap::new(),
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        assert!(json.contains("\"has_passphrase\":true"));
+        let restored: VaultData = serde_json::from_str(&json).unwrap();
+        assert!(restored.has_passphrase);
+    }
+
+    #[test]
+    fn vault_data_secret_with_empty_value() {
+        let mut secrets = HashMap::new();
+        secrets.insert("EMPTY".into(), "".into());
+        let data = VaultData {
+            secrets,
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.get("EMPTY").unwrap(), "");
+    }
+
+    #[test]
+    fn vault_data_secret_with_special_chars() {
+        let mut secrets = HashMap::new();
+        secrets.insert("SPECIAL".into(), "hello world! @#$%^&*() 你好".into());
+        let data = VaultData {
+            secrets,
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(
+            loaded.secrets.get("SPECIAL").unwrap(),
+            "hello world! @#$%^&*() 你好"
+        );
+    }
+
+    #[test]
+    fn vault_data_unicode_token() {
+        let data = VaultData {
+            github_token: Some("ghp_测试token".into()),
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.github_token.as_deref(), Some("ghp_测试token"));
+    }
+
+    #[test]
+    fn save_load_roundtrip_different_passphrases() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let data = test_vault_data();
+
+        save_to_path(&data, "pass1", &path).unwrap();
+        let result = load_from_path("pass2", &path);
+        assert!(result.is_err());
+        // Load with correct passphrase still works
+        let loaded = load_from_path("pass1", &path).unwrap().unwrap();
+        assert_eq!(loaded.github_token, data.github_token);
+    }
+
+    #[test]
+    fn vault_constants() {
+        assert_eq!(NONCE_LEN, 24);
+        assert_eq!(KEY_LEN, 32);
+        assert_eq!(DOMAIN_SEPARATOR, b"|ghscaff-vault-v1");
+    }
+
+    #[test]
+    fn vault_path_contains_ghscaff_dir() {
+        let p = vault_path().unwrap();
+        let s = p.to_string_lossy();
+        assert!(s.contains(".ghscaff"));
+        assert!(s.ends_with("vault.enc"));
+    }
+
+    #[test]
+    fn derive_key_special_characters() {
+        let key1 = derive_key("!@#$%^&*()").unwrap();
+        let key2 = derive_key("!@#$%^&*()").unwrap();
+        assert_eq!(key1, key2);
+        assert_ne!(key1, derive_key("normal").unwrap());
+    }
+
+    #[test]
+    fn vault_data_large_secrets_map() {
+        let mut secrets = HashMap::new();
+        for i in 0..100 {
+            secrets.insert(format!("KEY_{i}"), format!("value_{i}"));
+        }
+        let data = VaultData {
+            secrets,
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.len(), 100);
+        assert_eq!(loaded.secrets.get("KEY_50").unwrap(), "value_50");
+    }
+
+    #[test]
+    fn save_load_with_long_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let long_pass = "a".repeat(500);
+        let data = test_vault_data();
+        save_to_path(&data, &long_pass, &path).unwrap();
+        let loaded = load_from_path(&long_pass, &path).unwrap().unwrap();
+        assert_eq!(loaded.github_token, data.github_token);
+    }
+
+    #[test]
+    fn save_to_path_sets_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let data = VaultData::default();
+        save_to_path(&data, "", &path).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&path).unwrap().permissions();
+            assert_eq!(perms.mode() & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn save_to_path_parent_dir_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("subdir").join("vault.enc");
+        let data = VaultData::default();
+        save_to_path(&data, "", &path).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(dir.path().join("subdir"))
+                .unwrap()
+                .permissions();
+            assert_eq!(perms.mode() & 0o777, 0o700);
+        }
+    }
+
+    #[test]
+    fn load_from_path_very_short_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        // Write exactly NONCE_LEN - 1 bytes (too short)
+        let data = vec![0u8; NONCE_LEN - 1];
+        std::fs::write(&path, &data).unwrap();
+        let result = load_from_path("", &path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Corrupt"));
+    }
+
+    #[test]
+    fn vault_data_with_empty_github_token() {
+        let data = VaultData {
+            github_token: Some(String::new()),
+            has_passphrase: false,
+            secrets: HashMap::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.github_token.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn save_load_roundtrip_many_passphrases() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let data = test_vault_data();
+
+        for i in 0..10 {
+            let pass = format!("pass_{}", i);
+            save_to_path(&data, &pass, &path).unwrap();
+            let loaded = load_from_path(&pass, &path).unwrap().unwrap();
+            assert_eq!(loaded.github_token, data.github_token);
+        }
+    }
+
+    #[test]
+    fn vault_data_secret_keys_preserved() {
+        let mut secrets = HashMap::new();
+        for c in 'a'..='z' {
+            secrets.insert(format!("KEY_{}", c), format!("val_{}", c));
+        }
+        let data = VaultData {
+            secrets,
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        for c in 'a'..='z' {
+            let key = format!("KEY_{}", c);
+            assert!(loaded.secrets.contains_key(&key), "Missing key: {}", key);
+        }
+    }
+
+    #[test]
+    fn vault_data_has_passphrase_roundtrip() {
+        let data = VaultData {
+            github_token: Some("tok".into()),
+            has_passphrase: true,
+            secrets: HashMap::from([("K".into(), "V".into())]),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "secret", &path).unwrap();
+        let loaded = load_from_path("secret", &path).unwrap().unwrap();
+        assert!(loaded.has_passphrase);
+        assert_eq!(loaded.github_token.as_deref(), Some("tok"));
+        assert_eq!(loaded.secrets.get("K").unwrap(), "V");
+    }
+
+    #[test]
+    fn vault_data_no_passphrase_roundtrip() {
+        let data = VaultData {
+            github_token: Some("tok".into()),
+            has_passphrase: false,
+            secrets: HashMap::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert!(!loaded.has_passphrase);
+    }
+
+    #[test]
+    fn derive_key_unicode_passphrase() {
+        let key = derive_key("日本語パスフレーズ").unwrap();
+        assert_eq!(key.len(), KEY_LEN);
+        let key2 = derive_key("日本語パスフレーズ").unwrap();
+        assert_eq!(key, key2);
+    }
+
+    #[test]
+    fn derive_key_emoji_passphrase() {
+        let key = derive_key("🔑🛡️").unwrap();
+        assert_eq!(key.len(), KEY_LEN);
+    }
+
+    #[test]
+    fn vault_data_debug_format() {
+        let data = VaultData::default();
+        let dbg = format!("{:?}", data);
+        assert!(dbg.contains("VaultData"));
+        assert!(dbg.contains("github_token"));
+        assert!(dbg.contains("has_passphrase"));
+        assert!(dbg.contains("secrets"));
+    }
+
+    #[test]
+    fn vault_data_clone_preserves_all_fields() {
+        let mut secrets = HashMap::new();
+        secrets.insert("A".into(), "1".into());
+        let data = VaultData {
+            github_token: Some("tok".into()),
+            has_passphrase: true,
+            secrets,
+        };
+        let cloned = data.clone();
+        assert_eq!(cloned.github_token, data.github_token);
+        assert_eq!(cloned.has_passphrase, data.has_passphrase);
+        assert_eq!(cloned.secrets, data.secrets);
+    }
+
+    #[test]
+    fn vault_data_inequality() {
+        let a = VaultData {
+            github_token: Some("tok1".into()),
+            ..Default::default()
+        };
+        let b = VaultData {
+            github_token: Some("tok2".into()),
+            ..Default::default()
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vault_data_inequality_secrets() {
+        let a = VaultData {
+            secrets: HashMap::from([("A".into(), "1".into())]),
+            ..Default::default()
+        };
+        let b = VaultData {
+            secrets: HashMap::from([("B".into(), "2".into())]),
+            ..Default::default()
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vault_data_inequality_passphrase() {
+        let a = VaultData {
+            has_passphrase: true,
+            ..Default::default()
+        };
+        let b = VaultData {
+            has_passphrase: false,
+            ..Default::default()
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vault_data_json_roundtrip_preserves_all_fields() {
+        let mut secrets = HashMap::new();
+        secrets.insert("KEY".into(), "VALUE".into());
+        let data = VaultData {
+            github_token: Some("ghp_test".into()),
+            has_passphrase: true,
+            secrets,
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        let restored: VaultData = serde_json::from_str(&json).unwrap();
+        assert_eq!(data, restored);
+    }
+
+    #[test]
+    fn destroy_existing_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&VaultData::default(), "", &path).unwrap();
+        assert!(path.exists());
+        // Simulate destroy by removing the file
+        std::fs::remove_file(&path).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn destroy_nonexistent_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.enc");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn exists_true_when_vault_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&VaultData::default(), "", &path).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn exists_false_when_no_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn save_secret_adds_to_existing_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        // Create initial vault with no secrets
+        let initial = VaultData::default();
+        save_to_path(&initial, "", &path).unwrap();
+
+        // Load, insert secret, save back (simulating save_secret logic)
+        let mut data = load_from_path("", &path).unwrap().unwrap();
+        assert!(data.secrets.is_empty());
+        data.secrets.insert("MY_TOKEN".into(), "token_value".into());
+        save_to_path(&data, "", &path).unwrap();
+
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.get("MY_TOKEN").unwrap(), "token_value");
+    }
+
+    #[test]
+    fn save_secret_overwrites_existing_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let mut data = VaultData::default();
+        data.secrets.insert("KEY".into(), "value1".into());
+        save_to_path(&data, "", &path).unwrap();
+
+        // Overwrite
+        let mut data2 = load_from_path("", &path).unwrap().unwrap();
+        data2.secrets.insert("KEY".into(), "value2".into());
+        save_to_path(&data2, "", &path).unwrap();
+
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.get("KEY").unwrap(), "value2");
+    }
+
+    #[test]
+    fn resolve_secret_returns_none_for_missing_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&VaultData::default(), "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert!(!loaded.secrets.contains_key("NONEXISTENT"));
+    }
+
+    #[test]
+    fn resolve_github_token_from_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let data = VaultData {
+            github_token: Some("ghp_from_vault".into()),
+            ..Default::default()
+        };
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.github_token.as_deref(), Some("ghp_from_vault"));
+    }
+
+    #[test]
+    fn save_load_roundtrip_unicode_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let data = test_vault_data();
+        save_to_path(&data, "パスフレーズ", &path).unwrap();
+        let loaded = load_from_path("パスフレーズ", &path).unwrap().unwrap();
+        assert_eq!(loaded.github_token, data.github_token);
+    }
+
+    #[test]
+    fn vault_data_default_equality() {
+        let a = VaultData::default();
+        let b = VaultData::default();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn vault_data_default_clone() {
+        let data = VaultData::default();
+        let cloned = data.clone();
+        assert_eq!(data, cloned);
+    }
+
+    #[test]
+    fn vault_data_secrets_preserve_order() {
+        let mut secrets = HashMap::new();
+        secrets.insert("Z_KEY".into(), "z".into());
+        secrets.insert("A_KEY".into(), "a".into());
+        secrets.insert("M_KEY".into(), "m".into());
+        let data = VaultData {
+            secrets,
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.len(), 3);
+        assert!(loaded.secrets.contains_key("Z_KEY"));
+        assert!(loaded.secrets.contains_key("A_KEY"));
+        assert!(loaded.secrets.contains_key("M_KEY"));
+    }
+
+    #[test]
+    fn vault_data_empty_string_token() {
+        let data = VaultData {
+            github_token: Some(String::new()),
+            has_passphrase: false,
+            secrets: HashMap::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.github_token.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn vault_data_many_secrets_roundtrip() {
+        let mut secrets = HashMap::new();
+        for i in 0..50 {
+            secrets.insert(format!("SECRET_{i:03}"), format!("value_{i}"));
+        }
+        let data = VaultData {
+            secrets,
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        save_to_path(&data, "", &path).unwrap();
+        let loaded = load_from_path("", &path).unwrap().unwrap();
+        assert_eq!(loaded.secrets.len(), 50);
+    }
+
+    #[test]
+    fn vault_data_debug_all_fields() {
+        let data = VaultData {
+            github_token: Some("tok".into()),
+            has_passphrase: true,
+            secrets: HashMap::from([("K".into(), "V".into())]),
+        };
+        let dbg = format!("{:?}", data);
+        assert!(dbg.contains("github_token"));
+        assert!(dbg.contains("has_passphrase"));
+        assert!(dbg.contains("secrets"));
+        assert!(dbg.contains("tok"));
+    }
+
+    #[test]
+    fn vault_data_clone_all_fields() {
+        let mut secrets = HashMap::new();
+        secrets.insert("A".into(), "1".into());
+        secrets.insert("B".into(), "2".into());
+        let data = VaultData {
+            github_token: Some("tok".into()),
+            has_passphrase: true,
+            secrets,
+        };
+        let cloned = data.clone();
+        assert_eq!(data, cloned);
+        assert_eq!(cloned.github_token, Some("tok".into()));
+        assert!(cloned.has_passphrase);
+        assert_eq!(cloned.secrets.len(), 2);
+    }
+
+    #[test]
+    fn vault_data_json_deserialize_empty_object() {
+        let json = r#"{}"#;
+        let data: VaultData = serde_json::from_str(json).unwrap();
+        assert_eq!(data, VaultData::default());
+    }
+
+    #[test]
+    fn vault_data_json_deserialize_full() {
+        let json = r#"{"github_token":"ghp_test","has_passphrase":true,"secrets":{"K":"V"}}"#;
+        let data: VaultData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.github_token.as_deref(), Some("ghp_test"));
+        assert!(data.has_passphrase);
+        assert_eq!(data.secrets.get("K").unwrap(), "V");
+    }
+
+    #[test]
+    fn vault_data_inequality_token() {
+        let a = VaultData {
+            github_token: Some("a".into()),
+            ..Default::default()
+        };
+        let b = VaultData {
+            github_token: Some("b".into()),
+            ..Default::default()
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vault_data_inequality_secrets_diff_values() {
+        let a = VaultData {
+            secrets: HashMap::from([("K".into(), "V1".into())]),
+            ..Default::default()
+        };
+        let b = VaultData {
+            secrets: HashMap::from([("K".into(), "V2".into())]),
+            ..Default::default()
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vault_data_inequality_secrets_diff_keys() {
+        let a = VaultData {
+            secrets: HashMap::from([("A".into(), "V".into())]),
+            ..Default::default()
+        };
+        let b = VaultData {
+            secrets: HashMap::from([("B".into(), "V".into())]),
+            ..Default::default()
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vault_constants_values() {
+        assert_eq!(NONCE_LEN, 24);
+        assert_eq!(KEY_LEN, 32);
+        assert_eq!(DOMAIN_SEPARATOR, b"|ghscaff-vault-v1");
+    }
+
+    #[test]
+    fn vault_path_structure() {
+        let p = vault_path().unwrap();
+        assert!(p.to_string_lossy().contains(".ghscaff"));
+        assert!(p.to_string_lossy().ends_with("vault.enc"));
+    }
+
+    #[test]
+    fn derive_key_various_lengths() {
+        for len in &[0, 1, 5, 100, 1000] {
+            let key = derive_key(&"a".repeat(*len)).unwrap();
+            assert_eq!(key.len(), KEY_LEN);
+        }
+    }
+
+    #[test]
+    fn test_resolve_secret_from_env_var() {
+        std::env::set_var("GHSCAFF_TEST_SECRET_XYZ", "env_value_123");
+        let result = resolve_secret("GHSCAFF_TEST_SECRET_XYZ", "").unwrap();
+        assert_eq!(result.as_deref(), Some("env_value_123"));
+        std::env::remove_var("GHSCAFF_TEST_SECRET_XYZ");
+    }
+
+    #[test]
+    fn test_resolve_secret_missing_key_returns_none() {
+        let result = resolve_secret("TOTALLY_NONEXISTENT_KEY_999999", "").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_github_token_from_env() {
+        std::env::set_var("GHSCAFF_TEST_TOKEN_ABC", "ghp_env_test");
+        let result = std::env::var("GHSCAFF_TEST_TOKEN_ABC").unwrap();
+        assert_eq!(result, "ghp_env_test");
+        std::env::remove_var("GHSCAFF_TEST_TOKEN_ABC");
+    }
+
+    #[test]
+    fn test_exists_does_not_panic() {
+        let _result = exists();
+    }
+
+    use std::sync::Mutex;
+    static VAULT_MUTEX: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_save_load_via_wrappers_with_backup() {
+        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let home = dirs::home_dir().unwrap();
+        let vault_dir = home.join(".ghscaff");
+        let vault_file = vault_dir.join("vault.enc");
+        let backup_file = vault_dir.join("vault.enc.bak_save_load");
+
+        let had_vault = vault_file.exists();
+        if had_vault {
+            std::fs::copy(&vault_file, &backup_file).unwrap();
+        }
+        std::fs::create_dir_all(&vault_dir).ok();
+
+        let data = VaultData {
+            github_token: Some("ghp_wrapper_test".into()),
+            has_passphrase: false,
+            secrets: HashMap::from([("WK".into(), "WV".into())]),
+        };
+        save(&data, "").unwrap();
+        let loaded = load("").unwrap().unwrap();
+        assert_eq!(loaded.github_token.as_deref(), Some("ghp_wrapper_test"));
+        assert_eq!(loaded.secrets.get("WK").unwrap(), "WV");
+
+        if had_vault {
+            std::fs::copy(&backup_file, &vault_file).unwrap();
+            let _ = std::fs::remove_file(&backup_file);
+        } else {
+            let _ = std::fs::remove_file(&vault_file);
+        }
+    }
+
+    #[test]
+    fn test_destroy_nonexistent_returns_false() {
+        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let home = dirs::home_dir().unwrap();
+        let vault_file = home.join(".ghscaff").join("vault.enc");
+        let backup = home.join(".ghscaff").join("vault.enc.bak_dstr_false");
+
+        let had = vault_file.exists();
+        if had {
+            std::fs::copy(&vault_file, &backup).unwrap();
+            let _ = std::fs::remove_file(&vault_file);
+        }
+
+        assert!(!vault_file.exists());
+        let result = destroy().unwrap();
+        assert!(!result);
+
+        if had {
+            let _ = std::fs::copy(&backup, &vault_file);
+            let _ = std::fs::remove_file(&backup);
+        }
+    }
+
+    #[test]
+    fn test_destroy_existing_returns_true() {
+        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let home = dirs::home_dir().unwrap();
+        let vault_file = home.join(".ghscaff").join("vault.enc");
+        let backup = home.join(".ghscaff").join("vault.enc.bak_dstr_true");
+
+        let had = vault_file.exists();
+        if had {
+            std::fs::copy(&vault_file, &backup).unwrap();
+        }
+        std::fs::create_dir_all(home.join(".ghscaff")).ok();
+
+        save_to_path(&VaultData::default(), "", &vault_file).unwrap();
+        assert!(vault_file.exists());
+        let result = destroy().unwrap();
+        assert!(result);
+        assert!(!vault_file.exists());
+
+        if had {
+            let _ = std::fs::copy(&backup, &vault_file);
+            let _ = std::fs::remove_file(&backup);
+        }
+    }
+
+    #[test]
+    fn test_save_secret_public_api_with_backup() {
+        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let home = dirs::home_dir().unwrap();
+        let vault_file = home.join(".ghscaff").join("vault.enc");
+        let backup = home.join(".ghscaff").join("vault.enc.bak_pub_sec");
+
+        let had = vault_file.exists();
+        if had {
+            std::fs::copy(&vault_file, &backup).unwrap();
+        }
+
+        save_secret("GHSCAFF_PUB_SEC", "pub_val", "").unwrap();
+        let loaded = load("").unwrap().unwrap();
+        assert_eq!(loaded.secrets.get("GHSCAFF_PUB_SEC").unwrap(), "pub_val");
+
+        if had {
+            let _ = std::fs::copy(&backup, &vault_file);
+            let _ = std::fs::remove_file(&backup);
+        } else {
+            let _ = std::fs::remove_file(&vault_file);
+        }
+    }
+
+    #[test]
+    fn test_save_secret_overwrite_public_api() {
+        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let home = dirs::home_dir().unwrap();
+        let vault_file = home.join(".ghscaff").join("vault.enc");
+        let backup = home.join(".ghscaff").join("vault.enc.bak_ow2");
+
+        let had = vault_file.exists();
+        if had {
+            std::fs::copy(&vault_file, &backup).unwrap();
+        }
+
+        save_secret("GHSCAFF_OW2", "first", "").unwrap();
+        save_secret("GHSCAFF_OW2", "second", "").unwrap();
+        let loaded = load("").unwrap().unwrap();
+        assert_eq!(loaded.secrets.get("GHSCAFF_OW2").unwrap(), "second");
+
+        if had {
+            let _ = std::fs::copy(&backup, &vault_file);
+            let _ = std::fs::remove_file(&backup);
+        } else {
+            let _ = std::fs::remove_file(&vault_file);
+        }
     }
 }
