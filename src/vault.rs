@@ -557,7 +557,7 @@ mod tests {
         save_to_path(&data, "", &path).unwrap();
         let loaded = load_from_path("", &path).unwrap().unwrap();
         assert_eq!(loaded.secrets.get("API_KEY").unwrap(), "key123");
-        assert!(loaded.secrets.get("NONEXISTENT").is_none());
+        assert!(!loaded.secrets.contains_key("NONEXISTENT"));
     }
 
     #[test]
@@ -993,7 +993,7 @@ mod tests {
         let path = dir.path().join("vault.enc");
         save_to_path(&VaultData::default(), "", &path).unwrap();
         let loaded = load_from_path("", &path).unwrap().unwrap();
-        assert!(loaded.secrets.get("NONEXISTENT").is_none());
+        assert!(!loaded.secrets.contains_key("NONEXISTENT"));
     }
 
     #[test]

@@ -825,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_owner_repo_whiteSpace() {
+    fn test_parse_owner_repo_white_space() {
         assert!(parse_owner_repo("  ").is_err());
     }
 

@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn test_remote_template_apply_placeholders() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders(
             "Hello {{name}}, welcome to {{description}} by {{github_org}}/{{github_repo}}",
@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn test_remote_template_apply_placeholders_no_tokens() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders("plain text", "a", "b", "c");
         assert_eq!(result, "plain text");
@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn test_remote_template_apply_placeholders_multiple_same_token() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders("{{name}} and {{name}}", "x", "y", "z");
         assert_eq!(result, "x and x");
@@ -471,7 +471,7 @@ mod tests {
         let toml_path = dir.path().join("template.toml");
         std::fs::write(&toml_path, "[package]\ntemplate = \"Rust\"\n").unwrap();
         let tmpl = RemoteTemplate {
-            cache_dir: dir.into_path(),
+            cache_dir: dir.keep(),
         };
         assert_eq!(tmpl.gitignore_from_toml(), "Rust");
     }
@@ -480,7 +480,7 @@ mod tests {
     fn test_remote_template_gitignore_from_toml_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let tmpl = RemoteTemplate {
-            cache_dir: dir.into_path(),
+            cache_dir: dir.keep(),
         };
         assert_eq!(tmpl.gitignore_from_toml(), "");
     }
@@ -491,7 +491,7 @@ mod tests {
         let toml_path = dir.path().join("template.toml");
         std::fs::write(&toml_path, "[package]\nname = \"test\"\n").unwrap();
         let tmpl = RemoteTemplate {
-            cache_dir: dir.into_path(),
+            cache_dir: dir.keep(),
         };
         assert_eq!(tmpl.gitignore_from_toml(), "");
     }
@@ -502,7 +502,7 @@ mod tests {
         let toml_path = dir.path().join("template.toml");
         std::fs::write(&toml_path, "").unwrap();
         let tmpl = RemoteTemplate {
-            cache_dir: dir.into_path(),
+            cache_dir: dir.keep(),
         };
         assert_eq!(tmpl.gitignore_from_toml(), "");
     }
@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn test_remote_template_default_topics() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         assert!(tmpl.default_topics().is_empty());
     }
@@ -572,7 +572,7 @@ mod tests {
         let toml_path = dir.path().join("template.toml");
         std::fs::write(&toml_path, "template = \"Python\"\n").unwrap();
         let tmpl = RemoteTemplate {
-            cache_dir: dir.into_path(),
+            cache_dir: dir.keep(),
         };
         assert_eq!(tmpl.gitignore_name(), "Python");
     }
@@ -752,7 +752,7 @@ required = false
     #[test]
     fn test_remote_template_apply_placeholders_only_github_placeholders() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders(
             "org={{github_org}} repo={{github_repo}}",
@@ -766,7 +766,7 @@ required = false
     #[test]
     fn test_remote_template_apply_placeholders_empty_strings() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders("{{name}}", "", "", "");
         assert_eq!(result, "");
@@ -775,7 +775,7 @@ required = false
     #[test]
     fn test_remote_template_apply_placeholders_special_chars_in_values() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders("{{name}}", "my\"app", "desc", "owner");
         assert_eq!(result, "my\"app");
@@ -791,7 +791,7 @@ required = false
         )
         .unwrap();
         let tmpl = RemoteTemplate {
-            cache_dir: dir.into_path(),
+            cache_dir: dir.keep(),
         };
         assert_eq!(tmpl.gitignore_from_toml(), "Python");
     }
@@ -802,7 +802,7 @@ required = false
         let toml_path = dir.path().join("template.toml");
         std::fs::write(&toml_path, "template = \"Go\"\n").unwrap();
         let tmpl = RemoteTemplate {
-            cache_dir: dir.into_path(),
+            cache_dir: dir.keep(),
         };
         assert_eq!(tmpl.gitignore_from_toml(), "Go");
     }
@@ -928,7 +928,7 @@ required = false
         let toml_path = dir.path().join("template.toml");
         std::fs::write(&toml_path, "template = 'Go'\n").unwrap();
         let tmpl = RemoteTemplate {
-            cache_dir: dir.into_path(),
+            cache_dir: dir.keep(),
         };
         // Single quotes aren't standard TOML, so this should return empty
         assert_eq!(tmpl.gitignore_from_toml(), "");
@@ -1023,7 +1023,7 @@ required = false
     #[test]
     fn test_remote_template_apply_placeholders_all_tokens() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders(
             "{{name}}/{{description}}/{{github_org}}/{{github_repo}}",
@@ -1037,7 +1037,7 @@ required = false
     #[test]
     fn test_remote_template_apply_placeholders_adjacent_tokens() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders("{{name}}{{description}}", "a", "b", "c");
         assert_eq!(result, "ab");
@@ -1046,7 +1046,7 @@ required = false
     #[test]
     fn test_remote_template_apply_placeholders_partial_match() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders("{{name}}ly is {{name}}s", "x", "y", "z");
         assert_eq!(result, "xly is xs");
@@ -1058,7 +1058,7 @@ required = false
         let toml_path = dir.path().join("template.toml");
         std::fs::write(&toml_path, "template = Ruby\n").unwrap();
         let tmpl = RemoteTemplate {
-            cache_dir: dir.into_path(),
+            cache_dir: dir.keep(),
         };
         assert_eq!(tmpl.gitignore_from_toml(), "");
     }
@@ -1103,7 +1103,7 @@ required = false
     #[test]
     fn test_remote_template_apply_placeholders_consecutive_same_token() {
         let tmpl = RemoteTemplate {
-            cache_dir: tempfile::tempdir().unwrap().into_path(),
+            cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders("{{name}}{{name}}{{name}}", "X", "", "");
         assert_eq!(result, "XXX");
