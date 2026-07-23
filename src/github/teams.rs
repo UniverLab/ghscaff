@@ -235,4 +235,69 @@ mod tests {
     fn test_add_team_to_repo_signature() {
         let _: fn(&GithubClient, &str, &str, &str, &str) -> Result<()> = add_team_to_repo;
     }
+
+    #[test]
+    fn test_team_deserialize_with_parent() {
+        let json = r#"{
+            "name": "frontend",
+            "slug": "frontend",
+            "description": "Frontend team",
+            "parent": null
+        }"#;
+        let team: Team = serde_json::from_str(json).unwrap();
+        assert_eq!(team.name, "frontend");
+        assert_eq!(team.slug, "frontend");
+    }
+
+    #[test]
+    fn test_team_access_all_permission_types_debug() {
+        for perm in &["pull", "triage", "push", "admin"] {
+            let access = TeamAccess {
+                team_slug: "team".to_string(),
+                permission: perm.to_string(),
+            };
+            let dbg = format!("{:?}", access);
+            assert!(dbg.contains(perm));
+        }
+    }
+
+    #[test]
+    fn test_add_team_body_serialization_admin() {
+        let body = AddTeamBody {
+            permission: "admin".to_string(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"admin\""));
+    }
+
+    #[test]
+    fn test_team_access_clone_preserves_fields() {
+        let access = TeamAccess {
+            team_slug: "my-team".to_string(),
+            permission: "triage".to_string(),
+        };
+        let cloned = access.clone();
+        assert_eq!(access.team_slug, cloned.team_slug);
+        assert_eq!(access.permission, cloned.permission);
+    }
+
+    #[test]
+    fn test_team_clone_preserves_all() {
+        let team = Team {
+            name: "design".to_string(),
+            slug: "design".to_string(),
+            description: Some("Design team".to_string()),
+        };
+        let cloned = team.clone();
+        assert_eq!(team.name, cloned.name);
+        assert_eq!(team.slug, cloned.slug);
+        assert_eq!(team.description, cloned.description);
+    }
+
+    #[test]
+    fn test_team_deserialize_unicode() {
+        let json = r#"{"name":"開発チーム","slug":"dev-team","description":"Development"}"#;
+        let team: Team = serde_json::from_str(json).unwrap();
+        assert_eq!(team.name, "開発チーム");
+    }
 }

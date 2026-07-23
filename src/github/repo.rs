@@ -278,4 +278,166 @@ mod tests {
         let org: Org = serde_json::from_str(json).unwrap();
         assert_eq!(org.login, "minimal-org");
     }
+
+    #[test]
+    fn test_user_deserialize_unicode_login() {
+        let json = r#"{"login":"user-日本語"}"#;
+        let user: User = serde_json::from_str(json).unwrap();
+        assert_eq!(user.login, "user-日本語");
+    }
+
+    #[test]
+    fn test_org_deserialize_unicode_login() {
+        let json = r#"{"login":"org-日本語"}"#;
+        let org: Org = serde_json::from_str(json).unwrap();
+        assert_eq!(org.login, "org-日本語");
+    }
+
+    #[test]
+    fn test_repo_deserialize_with_long_description() {
+        let json = r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":["a","b","c","d","e","f","g","h","i","j"]}"#;
+        let repo: Repo = serde_json::from_str(json).unwrap();
+        assert_eq!(repo.topics.unwrap().len(), 10);
+    }
+
+    #[test]
+    fn test_create_repo_body_private_false() {
+        #[derive(Serialize)]
+        struct CreateRepoBody<'a> {
+            name: &'a str,
+            description: &'a str,
+            private: bool,
+            auto_init: bool,
+        }
+        let body = CreateRepoBody {
+            name: "public-repo",
+            description: "Public",
+            private: false,
+            auto_init: true,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"private\":false"));
+        assert!(json.contains("\"auto_init\":true"));
+    }
+
+    #[test]
+    fn test_create_repo_body_empty_description() {
+        #[derive(Serialize)]
+        struct CreateRepoBody<'a> {
+            name: &'a str,
+            description: &'a str,
+            private: bool,
+            auto_init: bool,
+        }
+        let body = CreateRepoBody {
+            name: "repo",
+            description: "",
+            private: false,
+            auto_init: true,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"description\":\"\""));
+    }
+
+    #[test]
+    fn test_topics_body_many_topics() {
+        #[derive(Serialize)]
+        struct TopicsBody {
+            names: Vec<String>,
+        }
+        let body = TopicsBody {
+            names: (0..20).map(|i| format!("topic{i}")).collect(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("topic0"));
+        assert!(json.contains("topic19"));
+    }
+
+    #[test]
+    fn test_repo_deserialize_default_branch_variations() {
+        for branch in &["main", "master", "develop", "dev", "production"] {
+            let json = format!(
+                r#"{{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"{}"}}"#,
+                branch
+            );
+            let repo: Repo = serde_json::from_str(&json).unwrap();
+            assert_eq!(repo.default_branch, *branch);
+        }
+    }
+
+    #[test]
+    fn test_gitignore_template_empty_source() {
+        let json = r#"{"source":""}"#;
+        #[derive(Deserialize)]
+        struct Template {
+            source: String,
+        }
+        let t: Template = serde_json::from_str(json).unwrap();
+        assert!(t.source.is_empty());
+    }
+
+    #[test]
+    fn test_license_template_empty_body() {
+        let json = r#"{"body":""}"#;
+        #[derive(Deserialize)]
+        struct License {
+            body: String,
+        }
+        let l: License = serde_json::from_str(json).unwrap();
+        assert!(l.body.is_empty());
+    }
+
+    #[test]
+    fn test_user_deserialize_special_characters() {
+        let json = r#"{"login":"user-with-dots.and-dashes"}"#;
+        let user: User = serde_json::from_str(json).unwrap();
+        assert_eq!(user.login, "user-with-dots.and-dashes");
+    }
+
+    #[test]
+    fn test_repo_deserialize_long_full_name() {
+        let full_name = format!("{}/{}", "a".repeat(39), "b".repeat(100));
+        let json = format!(
+            r#"{{"full_name":"{}","html_url":"https://example.com","default_branch":"main"}}"#,
+            full_name
+        );
+        let repo: Repo = serde_json::from_str(&json).unwrap();
+        assert_eq!(repo.full_name, full_name);
+    }
+
+    #[test]
+    fn test_create_repo_body_special_chars_in_name() {
+        #[derive(Serialize)]
+        struct CreateRepoBody<'a> {
+            name: &'a str,
+            description: &'a str,
+            private: bool,
+            auto_init: bool,
+        }
+        let body = CreateRepoBody {
+            name: "my-special-repo_v2.0",
+            description: "Repo with special chars: !@#$%",
+            private: true,
+            auto_init: false,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("my-special-repo_v2.0"));
+        assert!(json.contains("\"auto_init\":false"));
+    }
+
+    #[test]
+    fn test_repo_deserialize_many_topics() {
+        let topics: Vec<String> = (0..50).map(|i| format!("topic{i}")).collect();
+        let topics_json = topics
+            .iter()
+            .map(|t| format!("\"{}\"", t))
+            .collect::<Vec<_>>()
+            .join(",");
+        let json = format!(
+            r#"{{"full_name":"o/r","html_url":"https://example.com","default_branch":"main","topics":[{}]}}"#,
+            topics_json
+        );
+        let repo: Repo = serde_json::from_str(&json).unwrap();
+        assert_eq!(repo.topics.unwrap().len(), 50);
+    }
 }

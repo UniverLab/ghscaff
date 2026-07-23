@@ -269,4 +269,78 @@ mod tests {
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains(&"a".repeat(100)));
     }
+
+    #[test]
+    fn test_public_key_response_deserialize_empty_key() {
+        let json = r#"{"key_id":"0","key":""}"#;
+        let resp: PublicKeyResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.key.is_empty());
+        assert_eq!(resp.key_id, "0");
+    }
+
+    #[test]
+    fn test_secrets_list_response_deserialize_single_secret() {
+        let json = r#"{"secrets":[{"name":"ONLY_SECRET"}]}"#;
+        let resp: SecretsListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.secrets.len(), 1);
+        assert_eq!(resp.secrets[0].name, "ONLY_SECRET");
+    }
+
+    #[test]
+    fn test_secret_entry_deserialize_minimal() {
+        let json = r#"{"name":"MY_SECRET"}"#;
+        let entry: SecretEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.name, "MY_SECRET");
+    }
+
+    #[test]
+    fn test_set_secret_body_json_roundtrip() {
+        let body = SetSecretBody {
+            encrypted_value: "enc_value_123".to_string(),
+            key_id: "key_456".to_string(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["encrypted_value"], "enc_value_123");
+        assert_eq!(parsed["key_id"], "key_456");
+    }
+
+    #[test]
+    fn test_secrets_list_real_github_many_secrets() {
+        let json = r#"{
+            "total_count": 5,
+            "secrets": [
+                {"name": "SECRET_A", "created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z"},
+                {"name": "SECRET_B", "created_at": "2024-01-02T00:00:00Z", "updated_at": "2024-01-02T00:00:00Z"},
+                {"name": "SECRET_C", "created_at": "2024-01-03T00:00:00Z", "updated_at": "2024-01-03T00:00:00Z"},
+                {"name": "SECRET_D", "created_at": "2024-01-04T00:00:00Z", "updated_at": "2024-01-04T00:00:00Z"},
+                {"name": "SECRET_E", "created_at": "2024-01-05T00:00:00Z", "updated_at": "2024-01-05T00:00:00Z"}
+            ]
+        }"#;
+        let resp: SecretsListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.secrets.len(), 5);
+        let names: Vec<&str> = resp.secrets.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"SECRET_C"));
+    }
+
+    #[test]
+    fn test_sealed_box_encrypt_unicode_plaintext() {
+        use crypto_box::PublicKey;
+        let recipient_pk = PublicKey::from([7u8; 32]);
+        let plaintext = "日本語テキスト".as_bytes();
+        let result = sealed_box_encrypt(&recipient_pk, plaintext);
+        // 32 (eph pk) + plaintext_len + 16 (tag)
+        assert_eq!(result.len(), 32 + plaintext.len() + 16);
+    }
+
+    #[test]
+    fn test_set_secret_body_special_chars() {
+        let body = SetSecretBody {
+            encrypted_value: "base64+with/special=chars".to_string(),
+            key_id: "key-with-dashes_123".to_string(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("base64+with/special=chars"));
+        assert!(json.contains("key-with-dashes_123"));
+    }
 }

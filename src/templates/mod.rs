@@ -871,4 +871,295 @@ required = false
         sorted.sort();
         assert_eq!(paths, sorted);
     }
+
+    #[test]
+    fn test_skip_files_completeness() {
+        assert_eq!(SKIP_FILES.len(), 4);
+        assert!(SKIP_FILES.contains(&"template.toml"));
+        assert!(SKIP_FILES.contains(&"secrets.toml"));
+        assert!(SKIP_FILES.contains(&"PLACEHOLDERS.md"));
+        assert!(SKIP_FILES.contains(&".gitignore"));
+    }
+
+    #[test]
+    fn test_available_fallback_constant() {
+        assert_eq!(AVAILABLE.len(), 1);
+        assert_eq!(AVAILABLE[0], "rust");
+    }
+
+    #[test]
+    fn test_secret_spec_required_true_explicit() {
+        let toml_str = r#"
+        [[secrets]]
+        name = "REQ"
+        description = "Required"
+        required = true
+        "#;
+        let file: SecretsFile = toml::from_str(toml_str).unwrap();
+        assert!(file.secrets[0].required);
+    }
+
+    #[test]
+    fn test_secret_spec_required_false_explicit() {
+        let toml_str = r#"
+        [[secrets]]
+        name = "OPT"
+        description = "Optional"
+        required = false
+        "#;
+        let file: SecretsFile = toml::from_str(toml_str).unwrap();
+        assert!(!file.secrets[0].required);
+    }
+
+    #[test]
+    fn test_secret_spec_name_empty() {
+        let toml_str = r#"
+        [[secrets]]
+        name = ""
+        description = "Empty name"
+        "#;
+        let file: SecretsFile = toml::from_str(toml_str).unwrap();
+        assert!(file.secrets[0].name.is_empty());
+    }
+
+    #[test]
+    fn test_remote_template_gitignore_from_toml_single_quotes() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("template.toml");
+        std::fs::write(&toml_path, "template = 'Go'\n").unwrap();
+        let tmpl = RemoteTemplate {
+            cache_dir: dir.into_path(),
+        };
+        // Single quotes aren't standard TOML, so this should return empty
+        assert_eq!(tmpl.gitignore_from_toml(), "");
+    }
+
+    #[test]
+    fn test_remote_template_boilerplate_files_multiple_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("rust");
+        let src = cache.join("src");
+        let tests = cache.join("tests");
+        let benches = cache.join("benches");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&tests).unwrap();
+        std::fs::create_dir_all(&benches).unwrap();
+        std::fs::write(cache.join("Cargo.toml"), "[package]").unwrap();
+        std::fs::write(src.join("lib.rs"), "pub fn f() {}").unwrap();
+        std::fs::write(tests.join("test.rs"), "#[test] fn t() {}").unwrap();
+        std::fs::write(benches.join("bench.rs"), "#[bench] fn b() {}").unwrap();
+
+        let tmpl = RemoteTemplate { cache_dir: cache };
+        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"Cargo.toml"));
+        assert!(paths.contains(&"src/lib.rs"));
+        assert!(paths.contains(&"tests/test.rs"));
+        assert!(paths.contains(&"benches/bench.rs"));
+    }
+
+    #[test]
+    fn test_repo_file_struct_all_fields() {
+        let file = RepoFile {
+            path: "src/main.rs".into(),
+            content: "fn main() {\n    println!(\"Hello\");\n}".into(),
+        };
+        assert_eq!(file.path, "src/main.rs");
+        assert!(file.content.contains("Hello"));
+    }
+
+    #[test]
+    fn test_apply_placeholders_multiple_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file1 = dir.path().join("a.txt");
+        let file2 = dir.path().join("b.txt");
+        std::fs::write(&file1, "{{name}}").unwrap();
+        std::fs::write(&file2, "{{description}}").unwrap();
+        apply_placeholders(dir.path(), "repo", "My Desc", "author").unwrap();
+        assert_eq!(std::fs::read_to_string(&file1).unwrap(), "repo");
+        assert_eq!(std::fs::read_to_string(&file2).unwrap(), "My Desc");
+    }
+
+    #[test]
+    fn test_secret_spec_debug_format() {
+        let spec = SecretSpec {
+            name: "MY_SECRET".into(),
+            description: "A secret".into(),
+            required: true,
+        };
+        let dbg = format!("{:?}", spec);
+        assert!(dbg.contains("MY_SECRET"));
+        assert!(dbg.contains("A secret"));
+    }
+
+    #[test]
+    fn test_secret_spec_clone_all_fields() {
+        let spec = SecretSpec {
+            name: "KEY".into(),
+            description: "Desc".into(),
+            required: false,
+        };
+        let cloned = spec.clone();
+        assert_eq!(spec.name, cloned.name);
+        assert_eq!(spec.description, cloned.description);
+        assert_eq!(spec.required, cloned.required);
+    }
+
+    #[test]
+    fn test_boilerplate_repo_constant_value() {
+        assert_eq!(BOILERPLATE_REPO, "UniverLab/ghscaff-boilerplate");
+    }
+
+    #[test]
+    fn test_content_entry_types() {
+        let json = r#"[{"name":"rust","type":"dir"},{"name":"README.md","type":"file"},{"name":".git","type":"dir"}]"#;
+        let entries: Vec<ContentEntry> = serde_json::from_str(json).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].entry_type, "dir");
+        assert_eq!(entries[1].entry_type, "file");
+        assert_eq!(entries[2].entry_type, "dir");
+    }
+
+    #[test]
+    fn test_remote_template_apply_placeholders_all_tokens() {
+        let tmpl = RemoteTemplate {
+            cache_dir: tempfile::tempdir().unwrap().into_path(),
+        };
+        let result = tmpl.apply_placeholders(
+            "{{name}}/{{description}}/{{github_org}}/{{github_repo}}",
+            "n",
+            "d",
+            "o",
+        );
+        assert_eq!(result, "n/d/o/n");
+    }
+
+    #[test]
+    fn test_remote_template_apply_placeholders_adjacent_tokens() {
+        let tmpl = RemoteTemplate {
+            cache_dir: tempfile::tempdir().unwrap().into_path(),
+        };
+        let result = tmpl.apply_placeholders("{{name}}{{description}}", "a", "b", "c");
+        assert_eq!(result, "ab");
+    }
+
+    #[test]
+    fn test_remote_template_apply_placeholders_partial_match() {
+        let tmpl = RemoteTemplate {
+            cache_dir: tempfile::tempdir().unwrap().into_path(),
+        };
+        let result = tmpl.apply_placeholders("{{name}}ly is {{name}}s", "x", "y", "z");
+        assert_eq!(result, "xly is xs");
+    }
+
+    #[test]
+    fn test_remote_template_gitignore_from_toml_no_quotes() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("template.toml");
+        std::fs::write(&toml_path, "template = Ruby\n").unwrap();
+        let tmpl = RemoteTemplate {
+            cache_dir: dir.into_path(),
+        };
+        assert_eq!(tmpl.gitignore_from_toml(), "");
+    }
+
+    #[test]
+    fn test_secret_spec_empty_secrets_file() {
+        let toml_str = "";
+        let file: SecretsFile = toml::from_str(toml_str).unwrap();
+        assert!(file.secrets.is_empty());
+    }
+
+    #[test]
+    fn test_secret_spec_only_header() {
+        let toml_str = "[package]\nname = \"test\"\n";
+        let file: SecretsFile = toml::from_str(toml_str).unwrap();
+        assert!(file.secrets.is_empty());
+    }
+
+    #[test]
+    fn test_apply_placeholders_just_author_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, "{{author}}/{{name}}/{{description}}").unwrap();
+        apply_placeholders(dir.path(), "repo", "desc", "myauthor").unwrap();
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "myauthor/repo/desc");
+    }
+
+    #[test]
+    fn test_remote_template_boilerplate_files_filter_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("rust");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join(".hidden"), "secret").unwrap();
+        std::fs::write(cache.join("visible.txt"), "content").unwrap();
+        let tmpl = RemoteTemplate { cache_dir: cache };
+        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"visible.txt"));
+    }
+
+    #[test]
+    fn test_remote_template_apply_placeholders_consecutive_same_token() {
+        let tmpl = RemoteTemplate {
+            cache_dir: tempfile::tempdir().unwrap().into_path(),
+        };
+        let result = tmpl.apply_placeholders("{{name}}{{name}}{{name}}", "X", "", "");
+        assert_eq!(result, "XXX");
+    }
+
+    #[test]
+    fn test_secret_spec_long_description() {
+        let toml_str = r#"
+        [[secrets]]
+        name = "LONG"
+        description = "This is a very long description that goes on and on and describes what this secret is for in great detail so the user knows exactly what to provide"
+        required = true
+        "#;
+        let file: SecretsFile = toml::from_str(toml_str).unwrap();
+        assert!(file.secrets[0].description.len() > 100);
+    }
+
+    #[test]
+    fn test_apply_placeholders_path_with_spaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("my dir");
+        std::fs::create_dir(&subdir).unwrap();
+        let file = subdir.join("file.txt");
+        std::fs::write(&file, "{{name}}").unwrap();
+        apply_placeholders(dir.path(), "replaced", "", "").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "replaced");
+    }
+
+    #[test]
+    fn test_apply_placeholders_special_chars_in_template() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("regex.txt");
+        std::fs::write(&file, "{{name}} [test] (group)").unwrap();
+        apply_placeholders(dir.path(), "myapp", "", "").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "myapp [test] (group)"
+        );
+    }
+
+    #[test]
+    fn test_remote_template_boilerplate_files_preserves_subdir_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("rust");
+        let a_dir = cache.join("a");
+        let b_dir = cache.join("b");
+        std::fs::create_dir_all(&a_dir).unwrap();
+        std::fs::create_dir_all(&b_dir).unwrap();
+        std::fs::write(cache.join("root.txt"), "root").unwrap();
+        std::fs::write(a_dir.join("a.txt"), "a").unwrap();
+        std::fs::write(b_dir.join("b.txt"), "b").unwrap();
+        let tmpl = RemoteTemplate { cache_dir: cache };
+        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(paths, sorted);
+    }
 }

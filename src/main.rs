@@ -371,4 +371,141 @@ mod tests {
         set_debug(false);
         assert!(!is_debug());
     }
+
+    #[test]
+    fn test_is_newer_major_minor_patch_all_different() {
+        assert!(is_newer("v1.2.3", "v2.3.4"));
+        assert!(!is_newer("v2.3.4", "v1.2.3"));
+    }
+
+    #[test]
+    fn test_is_newer_major_minor_same_patch_different() {
+        assert!(is_newer("v1.1.0", "v1.1.1"));
+        assert!(!is_newer("v1.1.1", "v1.1.0"));
+    }
+
+    #[test]
+    fn test_is_newer_major_same_minor_different() {
+        assert!(is_newer("v1.1.0", "v1.2.0"));
+        assert!(!is_newer("v1.2.0", "v1.1.0"));
+    }
+
+    #[test]
+    fn test_is_newer_with_whitespace() {
+        assert!(!is_newer("v1.0.0 ", "v1.0.0"));
+        assert!(!is_newer("v1.0.0", " v1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_four_part_version() {
+        assert!(is_newer("v1.0.0.0", "v1.0.1.0"));
+    }
+
+    #[test]
+    fn test_is_newer_latest_is_shorter() {
+        assert!(!is_newer("v1.0.0", "v1.0"));
+    }
+
+    #[test]
+    fn test_is_newer_current_is_shorter() {
+        assert!(!is_newer("v1.0", "v1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_both_short() {
+        assert!(!is_newer("v1", "v1"));
+    }
+
+    #[test]
+    fn test_is_newer_non_version_string() {
+        assert!(!is_newer("latest", "stable"));
+    }
+
+    #[test]
+    fn test_set_debug_idempotent() {
+        set_debug(true);
+        set_debug(true);
+        assert!(is_debug());
+        set_debug(false);
+        set_debug(false);
+        assert!(!is_debug());
+    }
+
+    #[test]
+    fn test_is_newer_boundary_values() {
+        assert!(is_newer("v0.0.0", "v1.0.0"));
+        assert!(!is_newer("v1.0.0", "v0.0.0"));
+        assert!(is_newer("v0.0.0", "v0.1.0"));
+        assert!(is_newer("v0.0.0", "v0.0.1"));
+    }
+
+    #[test]
+    fn test_is_newer_with_extra_dots() {
+        assert!(!is_newer("v1..0", "v1..0"));
+    }
+
+    #[test]
+    fn test_is_newer_with_leading_zeros() {
+        assert!(!is_newer("v01.00.00", "v1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_major_10_vs_9() {
+        assert!(is_newer("v9.0.0", "v10.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_minor_99_vs_100() {
+        assert!(is_newer("v1.99.0", "v1.100.0"));
+    }
+
+    #[test]
+    fn test_is_newer_patch_999_vs_1000() {
+        assert!(is_newer("v1.0.999", "v1.0.1000"));
+    }
+
+    #[test]
+    fn test_is_newer_all_zero_vs_one() {
+        assert!(is_newer("v0.0.0", "v0.0.1"));
+        assert!(is_newer("v0.0.0", "v0.1.0"));
+        assert!(is_newer("v0.0.0", "v1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_identical_complex() {
+        assert!(!is_newer("v1.2.3", "v1.2.3"));
+    }
+
+    #[test]
+    fn test_is_newer_current_greater_patch() {
+        assert!(!is_newer("v1.0.5", "v1.0.3"));
+    }
+
+    #[test]
+    fn test_is_newer_current_greater_minor() {
+        assert!(!is_newer("v1.5.0", "v1.3.0"));
+    }
+
+    #[test]
+    fn test_is_newer_current_greater_major() {
+        assert!(!is_newer("v5.0.0", "v3.0.0"));
+    }
+
+    #[test]
+    fn test_debug_mode_default_is_false() {
+        set_debug(false);
+        assert!(!is_debug());
+    }
+
+    #[test]
+    fn test_debug_mode_toggle_sequence() {
+        set_debug(false);
+        assert!(!is_debug());
+        set_debug(true);
+        assert!(is_debug());
+        set_debug(true);
+        assert!(is_debug());
+        set_debug(false);
+        assert!(!is_debug());
+    }
 }

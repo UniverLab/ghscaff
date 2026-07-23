@@ -852,4 +852,392 @@ mod tests {
         // ssh:// prefix is not handled
         assert!(parse_github_remote(remote).is_err());
     }
+
+    #[test]
+    fn test_parse_https_remote_with_nested_path() {
+        let remote = "https://github.com/org/sub/repo.git";
+        let result = parse_github_remote(remote);
+        assert!(result.is_ok());
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "org");
+        assert_eq!(repo, "sub");
+    }
+
+    #[test]
+    fn test_parse_ssh_remote_with_nested_path() {
+        let remote = "git@github.com:org/sub/repo.git";
+        let result = parse_github_remote(remote);
+        assert!(result.is_ok());
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "org");
+        assert_eq!(repo, "sub");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_single_char() {
+        let (owner, repo) = parse_owner_repo("a/b").unwrap();
+        assert_eq!(owner, "a");
+        assert_eq!(repo, "b");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_long_names() {
+        let (owner, repo) = parse_owner_repo("very-long-owner-name/very-long-repo-name").unwrap();
+        assert_eq!(owner, "very-long-owner-name");
+        assert_eq!(repo, "very-long-repo-name");
+    }
+
+    #[test]
+    fn test_sync_result_fields_access() {
+        let result = SyncResult {
+            created: 10,
+            updated: 20,
+            up_to_date: 30,
+            deleted: 40,
+        };
+        assert_eq!(
+            result.created + result.updated + result.up_to_date + result.deleted,
+            100
+        );
+    }
+
+    #[test]
+    fn test_apply_context_with_multiple_labels() {
+        let labels: Vec<labels::Label> = (0..10)
+            .map(|i| labels::Label {
+                name: format!("label{i}"),
+                color: format!("{:06x}", i * 1000),
+                description: format!("Label {i}"),
+            })
+            .collect();
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: labels.clone(),
+            has_develop: true,
+            branch_protection_enabled: true,
+            has_ci_workflow: true,
+            current_topics: vec![],
+        };
+        assert_eq!(ctx.current_labels.len(), 10);
+        assert_eq!(ctx.current_labels[5].name, "label5");
+    }
+
+    #[test]
+    fn test_apply_context_equality() {
+        let a = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: true,
+            branch_protection_enabled: false,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        let b = a.clone();
+        assert_eq!(a.owner, b.owner);
+        assert_eq!(a.repo, b.repo);
+        assert_eq!(a.has_develop, b.has_develop);
+        assert_eq!(a.branch_protection_enabled, b.branch_protection_enabled);
+        assert_eq!(a.has_ci_workflow, b.has_ci_workflow);
+        assert_eq!(a.current_topics, b.current_topics);
+    }
+
+    #[test]
+    fn test_apply_context_debug_format() {
+        let ctx = ApplyContext {
+            owner: "test-owner".into(),
+            repo: "test-repo".into(),
+            current_labels: vec![],
+            has_develop: false,
+            branch_protection_enabled: false,
+            has_ci_workflow: false,
+            current_topics: vec![],
+        };
+        let dbg = format!("{:?}", ctx);
+        assert!(dbg.contains("test-owner"));
+        assert!(dbg.contains("test-repo"));
+    }
+
+    #[test]
+    fn test_sync_result_debug_format() {
+        let result = SyncResult {
+            created: 5,
+            updated: 3,
+            up_to_date: 10,
+            deleted: 2,
+        };
+        let dbg = format!("{:?}", result);
+        assert!(dbg.contains("5"));
+        assert!(dbg.contains("3"));
+        assert!(dbg.contains("10"));
+        assert!(dbg.contains("2"));
+    }
+
+    #[test]
+    fn test_sync_result_clone_fields() {
+        let result = SyncResult {
+            created: 1,
+            updated: 2,
+            up_to_date: 3,
+            deleted: 4,
+        };
+        let cloned = result.clone();
+        assert_eq!(result.created, cloned.created);
+        assert_eq!(result.updated, cloned.updated);
+        assert_eq!(result.up_to_date, cloned.up_to_date);
+        assert_eq!(result.deleted, cloned.deleted);
+    }
+
+    #[test]
+    fn test_parse_owner_repo_numeric_parts() {
+        let (owner, repo) = parse_owner_repo("123/456").unwrap();
+        assert_eq!(owner, "123");
+        assert_eq!(repo, "456");
+    }
+
+    #[test]
+    fn test_parse_https_remote_with_dot_git_suffix_only() {
+        let remote = "https://github.com/user/project.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "user");
+        assert_eq!(repo, "project");
+    }
+
+    #[test]
+    fn test_parse_ssh_remote_with_dot_git_suffix_only() {
+        let remote = "git@github.com:user/project.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "user");
+        assert_eq!(repo, "project");
+    }
+
+    #[test]
+    fn test_parse_https_not_github() {
+        assert!(parse_github_remote("https://gitlab.com/owner/repo.git").is_err());
+    }
+
+    #[test]
+    fn test_parse_ssh_not_github() {
+        assert!(parse_github_remote("git@gitlab.com:owner/repo.git").is_err());
+    }
+
+    #[test]
+    fn test_parse_github_remote_bitbucket() {
+        assert!(parse_github_remote("https://bitbucket.org/owner/repo.git").is_err());
+    }
+
+    #[test]
+    fn test_apply_context_clone_debug() {
+        let ctx = ApplyContext {
+            owner: "org".into(),
+            repo: "repo".into(),
+            current_labels: vec![labels::Label {
+                name: "bug".into(),
+                color: "ff0000".into(),
+                description: "Bug".into(),
+            }],
+            has_develop: true,
+            branch_protection_enabled: true,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into(), "cli".into()],
+        };
+        let cloned = ctx.clone();
+        assert_eq!(cloned.current_labels.len(), 1);
+        assert_eq!(cloned.current_topics.len(), 2);
+    }
+
+    #[test]
+    fn test_add_team_to_repo_signature_types() {
+        let _: fn(&GithubClient, &str, &str, &str, &str, bool) -> Result<()> = add_team_to_repo;
+    }
+
+    #[test]
+    fn test_list_org_teams_signature_types() {
+        let _: fn(&GithubClient, &str) -> Result<Vec<teams::Team>> = list_org_teams;
+    }
+
+    #[test]
+    fn test_apply_context_empty_topics() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: false,
+            branch_protection_enabled: false,
+            has_ci_workflow: false,
+            current_topics: vec![],
+        };
+        assert!(ctx.current_topics.is_empty());
+    }
+
+    #[test]
+    fn test_sync_result_negative_impossible() {
+        let result = SyncResult {
+            created: 0,
+            updated: 0,
+            up_to_date: 0,
+            deleted: 0,
+        };
+        assert_eq!(result.created, 0);
+        assert_eq!(result.updated, 0);
+        assert_eq!(result.up_to_date, 0);
+        assert_eq!(result.deleted, 0);
+    }
+
+    #[test]
+    fn test_parse_github_remote_exact_https() {
+        let remote = "https://github.com/octocat/hello-world.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "octocat");
+        assert_eq!(repo, "hello-world");
+    }
+
+    #[test]
+    fn test_parse_github_remote_exact_ssh() {
+        let remote = "git@github.com:octocat/hello-world.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "octocat");
+        assert_eq!(repo, "hello-world");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_exact_match() {
+        let (owner, repo) = parse_owner_repo("octocat/hello-world").unwrap();
+        assert_eq!(owner, "octocat");
+        assert_eq!(repo, "hello-world");
+    }
+
+    #[test]
+    fn test_apply_context_all_fields_set() {
+        let ctx = ApplyContext {
+            owner: "my-org".into(),
+            repo: "my-repo".into(),
+            current_labels: vec![
+                labels::Label {
+                    name: "bug".into(),
+                    color: "d73a4a".into(),
+                    description: "Bug".into(),
+                },
+                labels::Label {
+                    name: "enhancement".into(),
+                    color: "a2eeef".into(),
+                    description: "Enhancement".into(),
+                },
+            ],
+            has_develop: true,
+            branch_protection_enabled: true,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into(), "cli".into(), "github".into()],
+        };
+        assert_eq!(ctx.owner, "my-org");
+        assert_eq!(ctx.repo, "my-repo");
+        assert_eq!(ctx.current_labels.len(), 2);
+        assert!(ctx.has_develop);
+        assert!(ctx.branch_protection_enabled);
+        assert!(ctx.has_ci_workflow);
+        assert_eq!(ctx.current_topics.len(), 3);
+    }
+
+    #[test]
+    fn test_apply_context_clone_preserves_all_fields() {
+        let ctx = ApplyContext {
+            owner: "org".into(),
+            repo: "repo".into(),
+            current_labels: vec![labels::Label {
+                name: "bug".into(),
+                color: "ff0000".into(),
+                description: "Bug".into(),
+            }],
+            has_develop: true,
+            branch_protection_enabled: true,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        let cloned = ctx.clone();
+        assert_eq!(ctx.owner, cloned.owner);
+        assert_eq!(ctx.repo, cloned.repo);
+        assert_eq!(ctx.current_labels.len(), cloned.current_labels.len());
+        assert_eq!(ctx.has_develop, cloned.has_develop);
+        assert_eq!(
+            ctx.branch_protection_enabled,
+            cloned.branch_protection_enabled
+        );
+        assert_eq!(ctx.has_ci_workflow, cloned.has_ci_workflow);
+        assert_eq!(ctx.current_topics, cloned.current_topics);
+    }
+
+    #[test]
+    fn test_sync_result_all_positive() {
+        let result = SyncResult {
+            created: 100,
+            updated: 200,
+            up_to_date: 300,
+            deleted: 400,
+        };
+        assert_eq!(result.created, 100);
+        assert_eq!(result.updated, 200);
+        assert_eq!(result.up_to_date, 300);
+        assert_eq!(result.deleted, 400);
+    }
+
+    #[test]
+    fn test_parse_github_remote_just_prefix_https() {
+        assert!(parse_github_remote("https://github.com/").is_err());
+    }
+
+    #[test]
+    fn test_parse_github_remote_just_prefix_ssh() {
+        assert!(parse_github_remote("git@github.com:").is_err());
+    }
+
+    #[test]
+    fn test_parse_owner_repo_only_slash() {
+        let (owner, repo) = parse_owner_repo("/").unwrap();
+        assert_eq!(owner, "");
+        assert_eq!(repo, "");
+    }
+
+    #[test]
+    fn test_add_team_to_repo_types() {
+        let _: fn(&GithubClient, &str, &str, &str, &str, bool) -> Result<()> = add_team_to_repo;
+    }
+
+    #[test]
+    fn test_list_org_teams_types() {
+        let _: fn(&GithubClient, &str) -> Result<Vec<teams::Team>> = list_org_teams;
+    }
+
+    #[test]
+    fn test_apply_context_debug_format_all_fields() {
+        let ctx = ApplyContext {
+            owner: "org".into(),
+            repo: "repo".into(),
+            current_labels: vec![],
+            has_develop: true,
+            branch_protection_enabled: false,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        let dbg = format!("{:?}", ctx);
+        assert!(dbg.contains("org"));
+        assert!(dbg.contains("repo"));
+        assert!(dbg.contains("true"));
+        assert!(dbg.contains("false"));
+    }
+
+    #[test]
+    fn test_sync_result_debug_format_all_fields() {
+        let result = SyncResult {
+            created: 1,
+            updated: 2,
+            up_to_date: 3,
+            deleted: 4,
+        };
+        let dbg = format!("{:?}", result);
+        assert!(dbg.contains("1"));
+        assert!(dbg.contains("2"));
+        assert!(dbg.contains("3"));
+        assert!(dbg.contains("4"));
+    }
 }

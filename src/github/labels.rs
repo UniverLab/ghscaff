@@ -296,4 +296,96 @@ mod tests {
             assert!(!label.name.is_empty(), "Name should not be empty");
         }
     }
+
+    #[test]
+    fn test_label_serialization_roundtrip() {
+        let label = Label {
+            name: "test-label".into(),
+            color: "ff0000".into(),
+            description: "A test label".into(),
+        };
+        let json = serde_json::to_string(&label).unwrap();
+        let restored: Label = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.name, "test-label");
+        assert_eq!(restored.color, "ff0000");
+        assert_eq!(restored.description, "A test label");
+    }
+
+    #[test]
+    fn test_label_deserialize_real_github_full_response() {
+        let json = r#"{
+            "id": 208045946,
+            "node_id": "MDU6TGFiZWwyMDgwNDU5NDY=",
+            "url": "https://api.github.com/repos/octocat/Hello-World/labels/bug",
+            "name": "bug",
+            "description": "Something isn't working",
+            "color": "d73a4a",
+            "default": true
+        }"#;
+        let label: Label = serde_json::from_str(json).unwrap();
+        assert_eq!(label.name, "bug");
+        assert_eq!(label.color, "d73a4a");
+        assert_eq!(label.description, "Something isn't working");
+    }
+
+    #[test]
+    fn test_label_with_colon_in_name() {
+        let label = Label {
+            name: "priority:high".into(),
+            color: "b60205".into(),
+            description: "High priority".into(),
+        };
+        let json = serde_json::to_string(&label).unwrap();
+        assert!(json.contains("priority:high"));
+    }
+
+    #[test]
+    fn test_standard_labels_each_has_color_and_desc() {
+        let labels = standard_labels();
+        for label in &labels {
+            assert!(!label.color.is_empty());
+            assert!(!label.description.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_label_clone_preserves_all() {
+        let label = Label {
+            name: "enhancement".into(),
+            color: "a2eeef".into(),
+            description: "New feature".into(),
+        };
+        let cloned = label.clone();
+        assert_eq!(label.name, cloned.name);
+        assert_eq!(label.color, cloned.color);
+        assert_eq!(label.description, cloned.description);
+    }
+
+    #[test]
+    fn test_label_debug_format() {
+        let label = Label {
+            name: "debug".into(),
+            color: "000000".into(),
+            description: "Debug label".into(),
+        };
+        let dbg = format!("{:?}", label);
+        assert!(dbg.contains("debug"));
+        assert!(dbg.contains("000000"));
+    }
+
+    #[test]
+    fn test_label_deserialize_with_extra_fields() {
+        let json = r#"{
+            "id": 1,
+            "node_id": "MDU6TGFiZWwx",
+            "url": "https://api.github.com/repos/owner/repo/labels/bug",
+            "name": "bug",
+            "description": "Bug",
+            "color": "d73a4a",
+            "default": true,
+            "label_id": 12345
+        }"#;
+        let label: Label = serde_json::from_str(json).unwrap();
+        assert_eq!(label.name, "bug");
+    }
 }

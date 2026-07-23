@@ -334,4 +334,199 @@ mod tests {
             assert!(json.contains(&format!("\"required_approving_review_count\":{count}")));
         }
     }
+
+    #[test]
+    fn test_ref_deserialize_missing_object() {
+        let json = r#"{"ref":"refs/heads/main"}"#;
+        let result = serde_json::from_str::<Ref>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ref_deserialize_empty_sha() {
+        let json = r#"{"object":{"sha":""}}"#;
+        let r: Ref = serde_json::from_str(json).unwrap();
+        assert!(r.object.sha.is_empty());
+    }
+
+    #[test]
+    fn test_ref_deserialize_nested_extra_fields() {
+        let json = r#"{
+            "ref": "refs/heads/main",
+            "node_id": "MDM6UmVmMjUyMjMzOTM5OjE=",
+            "url": "https://api.github.com/repos/owner/repo/git/refs/heads/main",
+            "object": {
+                "sha": "abc123",
+                "type": "commit",
+                "url": "https://api.github.com/repos/owner/repo/git/commits/abc123"
+            }
+        }"#;
+        let r: Ref = serde_json::from_str(json).unwrap();
+        assert_eq!(r.object.sha, "abc123");
+    }
+
+    #[test]
+    fn test_body_ref_empty_string() {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            r#ref: &'a str,
+            sha: &'a str,
+        }
+        let body = Body { r#ref: "", sha: "" };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"ref\":\"\""));
+        assert!(json.contains("\"sha\":\"\""));
+    }
+
+    #[test]
+    fn test_protection_body_restrictions_null() {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            required_status_checks: RequiredChecks<'a>,
+            enforce_admins: bool,
+            required_pull_request_reviews: Reviews,
+            restrictions: Option<()>,
+            allow_force_pushes: bool,
+        }
+        #[derive(Serialize)]
+        struct RequiredChecks<'a> {
+            strict: bool,
+            contexts: Vec<&'a str>,
+        }
+        #[derive(Serialize)]
+        struct Reviews {
+            dismiss_stale_reviews: bool,
+            required_approving_review_count: u8,
+        }
+
+        let body = Body {
+            required_status_checks: RequiredChecks {
+                strict: false,
+                contexts: vec![],
+            },
+            enforce_admins: true,
+            required_pull_request_reviews: Reviews {
+                dismiss_stale_reviews: false,
+                required_approving_review_count: 0,
+            },
+            restrictions: None,
+            allow_force_pushes: true,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"restrictions\":null"));
+        assert!(json.contains("\"enforce_admins\":true"));
+        assert!(json.contains("\"allow_force_pushes\":true"));
+        assert!(json.contains("\"strict\":false"));
+        assert!(json.contains("\"required_approving_review_count\":0"));
+    }
+
+    #[test]
+    fn test_protection_body_many_ci_checks() {
+        #[derive(Serialize)]
+        struct RequiredChecks<'a> {
+            strict: bool,
+            contexts: Vec<&'a str>,
+        }
+
+        let checks = RequiredChecks {
+            strict: true,
+            contexts: vec!["ci/build", "ci/test", "ci/lint", "ci/format", "ci/security"],
+        };
+        let json = serde_json::to_string(&checks).unwrap();
+        assert!(json.contains("\"ci/build\""));
+        assert!(json.contains("\"ci/test\""));
+        assert!(json.contains("\"ci/lint\""));
+        assert!(json.contains("\"ci/format\""));
+        assert!(json.contains("\"ci/security\""));
+    }
+
+    #[test]
+    fn test_body_ref_long_sha() {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            r#ref: &'a str,
+            sha: &'a str,
+        }
+        let body = Body {
+            r#ref: "refs/heads/main",
+            sha: "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"sha\":\"da39a3ee5e6b4b0d3255bfef95601890afd80709\""));
+    }
+
+    #[test]
+    fn test_reviews_serialization_dismiss_stale() {
+        #[derive(Serialize)]
+        struct Reviews {
+            dismiss_stale_reviews: bool,
+            required_approving_review_count: u8,
+        }
+
+        let reviews = Reviews {
+            dismiss_stale_reviews: true,
+            required_approving_review_count: 2,
+        };
+        let json = serde_json::to_string(&reviews).unwrap();
+        assert!(json.contains("\"dismiss_stale_reviews\":true"));
+        assert!(json.contains("\"required_approving_review_count\":2"));
+    }
+
+    #[test]
+    fn test_ref_deserialize_type_field() {
+        let json = r#"{"object":{"sha":"abc","type":"tag"}}"#;
+        let r: Ref = serde_json::from_str(json).unwrap();
+        assert_eq!(r.object.sha, "abc");
+    }
+
+    #[test]
+    fn test_protection_body_full_roundtrip() {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            required_status_checks: RequiredChecks<'a>,
+            enforce_admins: bool,
+            required_pull_request_reviews: Reviews,
+            restrictions: Option<()>,
+            allow_force_pushes: bool,
+        }
+        #[derive(Serialize)]
+        struct RequiredChecks<'a> {
+            strict: bool,
+            contexts: Vec<&'a str>,
+        }
+        #[derive(Serialize)]
+        struct Reviews {
+            dismiss_stale_reviews: bool,
+            required_approving_review_count: u8,
+        }
+
+        let body = Body {
+            required_status_checks: RequiredChecks {
+                strict: true,
+                contexts: vec!["ci/build"],
+            },
+            enforce_admins: false,
+            required_pull_request_reviews: Reviews {
+                dismiss_stale_reviews: true,
+                required_approving_review_count: 1,
+            },
+            restrictions: None,
+            allow_force_pushes: false,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["required_status_checks"]["strict"], true);
+        assert_eq!(parsed["required_status_checks"]["contexts"][0], "ci/build");
+        assert_eq!(parsed["enforce_admins"], false);
+        assert_eq!(
+            parsed["required_pull_request_reviews"]["dismiss_stale_reviews"],
+            true
+        );
+        assert_eq!(
+            parsed["required_pull_request_reviews"]["required_approving_review_count"],
+            1
+        );
+        assert!(parsed["restrictions"].is_null());
+        assert_eq!(parsed["allow_force_pushes"], false);
+    }
 }

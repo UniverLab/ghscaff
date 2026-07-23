@@ -604,4 +604,99 @@ mod tests {
         };
         assert!(file.path.contains("a/"));
     }
+
+    #[test]
+    fn test_blob_body_long_content() {
+        let body = BlobBody {
+            content: "x".repeat(10000),
+            encoding: "utf-8".to_string(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.len() > 10000);
+    }
+
+    #[test]
+    fn test_tree_item_body_json_roundtrip() {
+        let item = TreeItemBody {
+            path: "test.rs".to_string(),
+            mode: "100644".to_string(),
+            item_type: "blob".to_string(),
+            sha: "abc123".to_string(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["path"], "test.rs");
+        assert_eq!(parsed["mode"], "100644");
+        assert_eq!(parsed["type"], "blob");
+        assert_eq!(parsed["sha"], "abc123");
+    }
+
+    #[test]
+    fn test_create_commit_body_json_roundtrip() {
+        let body = CreateCommitBody {
+            message: "feat: add new feature".to_string(),
+            tree: "tree_sha_abc".to_string(),
+            parents: vec!["parent_sha_1".to_string()],
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["message"], "feat: add new feature");
+        assert_eq!(parsed["tree"], "tree_sha_abc");
+        assert_eq!(parsed["parents"][0], "parent_sha_1");
+    }
+
+    #[test]
+    fn test_create_ref_body_json_roundtrip() {
+        let body = CreateRefBody {
+            ref_name: "refs/heads/develop".to_string(),
+            sha: "sha_789".to_string(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["ref"], "refs/heads/develop");
+        assert_eq!(parsed["sha"], "sha_789");
+    }
+
+    #[test]
+    fn test_update_ref_body_json_roundtrip() {
+        let body = UpdateRefBody {
+            sha: "new_sha_abc".to_string(),
+            force: true,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["sha"], "new_sha_abc");
+        assert_eq!(parsed["force"], true);
+    }
+
+    #[test]
+    fn test_tree_file_content_with_newlines() {
+        let file = TreeFile {
+            path: "file.txt".to_string(),
+            content: "line1\nline2\nline3\n".to_string(),
+        };
+        assert!(file.content.contains('\n'));
+    }
+
+    #[test]
+    fn test_blob_body_unicode_content() {
+        let body = BlobBody {
+            content: "日本語コンテンツ".to_string(),
+            encoding: "utf-8".to_string(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("日本語コンテンツ"));
+    }
+
+    #[test]
+    fn test_tree_item_body_special_path() {
+        let item = TreeItemBody {
+            path: ".github/workflows/ci.yml".to_string(),
+            mode: "100644".to_string(),
+            item_type: "blob".to_string(),
+            sha: "cafe".to_string(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains(".github/workflows/ci.yml"));
+    }
 }
