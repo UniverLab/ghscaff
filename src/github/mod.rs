@@ -4,4 +4,5 @@ pub mod contents;
 pub mod labels;
 pub mod repo;
 pub mod secrets;
+pub mod sponsors;
 pub mod teams;
