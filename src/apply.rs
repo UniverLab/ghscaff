@@ -365,13 +365,27 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     sync_labels(&client, &owner, &repo_name, false)?;
     println!("  ✓ Labels synced");
 
-    // 2. Branch protection (always apply to ensure correct config)
+    // 2. Branch protection (always apply to ensure correct config) — required
+    // contexts are derived from the repo's live workflow files, never hardcoded,
+    // so a renamed job can't leave a required check pointing at a name nothing
+    // will ever report.
+    let workflow_files = crate::github::contents::fetch_workflow_sources(
+        &client,
+        &owner,
+        &repo_name,
+        &[".github/workflows/ci.yml"],
+    );
+    let workflow_sources: Vec<crate::checks::WorkflowSource> = workflow_files
+        .iter()
+        .map(|(path, content)| crate::checks::WorkflowSource { path, content })
+        .collect();
+    let required_contexts = crate::checks::derive_required_contexts(&workflow_sources);
     match crate::github::branches::apply_branch_protection(
         &client,
         &owner,
         &repo_name,
         "main",
-        Some("rust-ci / Format, Lint & Test"),
+        &required_contexts,
     ) {
         Ok(()) => println!("  ✓ Branch protection applied"),
         Err(e) => {
@@ -472,7 +486,7 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn parse_owner_repo(input: &str) -> Result<(String, String)> {
+pub fn parse_owner_repo(input: &str) -> Result<(String, String)> {
     let parts: Vec<&str> = input.split('/').collect();
     if parts.len() != 2 {
         anyhow::bail!("Invalid repo format. Use: owner/repo");

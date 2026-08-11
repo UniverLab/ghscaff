@@ -352,21 +352,33 @@ fn execute(
         });
     }
 
-    // 5. Branch protection
-    let ci_check = c
-        .language
-        .as_deref()
-        .map(|_| "rust-ci / Format, Lint & Test");
+    // 5. Branch protection — required contexts are derived from the workflow
+    // files just committed, never hardcoded, so a renamed job can't leave a
+    // required check pointing at a name nothing will ever report.
+    let workflow_sources: Vec<crate::checks::WorkflowSource> = init_files
+        .iter()
+        .map(|f| crate::checks::WorkflowSource {
+            path: &f.path,
+            content: &f.content,
+        })
+        .collect();
+    let required_contexts = crate::checks::derive_required_contexts(&workflow_sources);
     step!(
         &format!("apply branch protection ({})", c.default_branch),
         {
-            branches::apply_branch_protection(client, owner, name, &c.default_branch, ci_check)?;
+            branches::apply_branch_protection(
+                client,
+                owner,
+                name,
+                &c.default_branch,
+                &required_contexts,
+            )?;
             Ok::<(), anyhow::Error>(())
         }
     );
     if c.create_develop {
         step!("apply branch protection (develop)", {
-            branches::apply_branch_protection(client, owner, name, "develop", ci_check)?;
+            branches::apply_branch_protection(client, owner, name, "develop", &required_contexts)?;
             Ok::<(), anyhow::Error>(())
         });
     }

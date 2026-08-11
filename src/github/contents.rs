@@ -1,11 +1,69 @@
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use super::client::GithubClient;
 
 pub struct TreeFile {
     pub path: String,
     pub content: String,
+}
+
+#[derive(Deserialize)]
+struct FileContentResponse {
+    content: String,
+    encoding: String,
+}
+
+/// Fetch and decode a single file's content from the repo. Returns `None` if the
+/// file doesn't exist, isn't accessible, or isn't base64-encoded text (e.g. a
+/// directory listing or a binary blob).
+pub fn get_file_content(
+    client: &GithubClient,
+    owner: &str,
+    repo: &str,
+    path: &str,
+) -> Option<String> {
+    let encoded_path = urlencoding::encode(path);
+    let api_path = format!("/repos/{owner}/{repo}/contents/{encoded_path}");
+    let file: FileContentResponse = client.get(&api_path).ok()?;
+    if file.encoding != "base64" {
+        return None;
+    }
+    let bytes = STANDARD.decode(file.content.replace('\n', "")).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// Fetch a workflow file plus every local reusable workflow it (transitively)
+/// calls via `uses: ./...`, so [`crate::checks::derive_required_contexts`] can
+/// resolve composed check names against a repo's live workflow files rather
+/// than assuming any local convention.
+pub fn fetch_workflow_sources(
+    client: &GithubClient,
+    owner: &str,
+    repo: &str,
+    entry_paths: &[&str],
+) -> Vec<(String, String)> {
+    let mut fetched = Vec::new();
+    let mut queue: Vec<String> = entry_paths.iter().map(|s| s.to_string()).collect();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    while let Some(path) = queue.pop() {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let Some(content) = get_file_content(client, owner, repo, &path) else {
+            continue;
+        };
+        for referenced in crate::checks::referenced_local_workflows(&content) {
+            if !seen.contains(&referenced) {
+                queue.push(referenced);
+            }
+        }
+        fetched.push((path, content));
+    }
+    fetched
 }
 
 #[derive(Serialize)]

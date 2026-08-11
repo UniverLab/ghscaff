@@ -3,6 +3,8 @@ use clap::{Parser, Subcommand};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod apply;
+mod checks;
+mod doctor;
 mod github;
 mod sponsor_cmd;
 mod templates;
@@ -58,6 +60,11 @@ enum Command {
     },
     /// Reconfigure ghscaff credentials (wipes vault and starts fresh)
     Config,
+    /// Check whether a repo's required status checks can ever be satisfied
+    Doctor {
+        /// owner/repo (auto-detected from git remote if omitted)
+        repo: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -73,6 +80,7 @@ fn main() -> Result<()> {
         None | Some(Command::New { .. }) => wizard::run(cli.dry_run),
         Some(Command::Apply { repo, dry_run }) => apply::run_apply(repo.as_deref(), dry_run),
         Some(Command::Config) => run_config(),
+        Some(Command::Doctor { repo }) => doctor::run_doctor(repo.as_deref()),
     }
 }
 
