@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 mod apply;
 mod github;
+mod sponsor_cmd;
 mod templates;
 mod vault;
 mod wizard;
@@ -27,6 +28,10 @@ pub fn is_debug() -> bool {
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+
+    /// Enable the GitHub Sponsor button on an existing repository (owner/repo), then exit
+    #[arg(long, value_name = "OWNER/REPO")]
+    sponsor: Option<String>,
 
     /// Preview changes without making any API call
     #[arg(long, global = true)]
@@ -58,6 +63,11 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     set_debug(cli.debug);
+
+    if let Some(target) = &cli.sponsor {
+        return sponsor_cmd::run_sponsor(target);
+    }
+
     check_for_update();
     match cli.command {
         None | Some(Command::New { .. }) => wizard::run(cli.dry_run),
@@ -192,6 +202,24 @@ fn run_installer() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cli_parses_sponsor_flag() {
+        let cli = Cli::try_parse_from(["ghscaff", "--sponsor", "UniverLab/ghscaff"]).unwrap();
+        assert_eq!(cli.sponsor.as_deref(), Some("UniverLab/ghscaff"));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_sponsor_flag_absent_by_default() {
+        let cli = Cli::try_parse_from(["ghscaff"]).unwrap();
+        assert!(cli.sponsor.is_none());
+    }
+
+    #[test]
+    fn test_cli_sponsor_flag_requires_value() {
+        assert!(Cli::try_parse_from(["ghscaff", "--sponsor"]).is_err());
+    }
 
     #[test]
     fn test_is_newer_major_version() {
