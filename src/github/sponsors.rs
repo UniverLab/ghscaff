@@ -1,8 +1,4 @@
 //! GitHub Sponsors capability: enable the Sponsor button on a repository.
-//!
-//! Not yet wired into the wizard or a CLI flag (that's tracked separately),
-//! so this module is intentionally unused for now.
-#![allow(dead_code)]
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
