@@ -42,9 +42,27 @@ When enabled, ghscaff applies to the default branch (and `develop` when
 present):
 
 - ✅ Require 1 approval before merging.
-- ✅ Require status checks to pass (wired to the CI workflow).
+- ✅ Require status checks to pass (automatically derived from the CI workflow).
 - ✅ Dismiss stale reviews.
 - ✅ Disallow force-push.
+
+### Status Check Derivation
+
+GitHub normally requires you to manually type the exact names of CI checks
+that must pass during branch protection setup. A typo or job name mismatch
+creates a rule that silently guards nothing.
+
+Ghscaff reads the CI workflow it commits and derives the required check
+names from it automatically. If you later rename a job in your CI workflow,
+the protection rule automatically refers to the new name on your next
+`ghscaff apply` run — no manual synchronization needed.
+
+To verify that your required checks can be satisfied by the latest CI run,
+use the `doctor` command:
+
+```bash
+ghscaff doctor owner/repo
+```
 
 ## Secrets
 

@@ -22,7 +22,7 @@ ghscaff apply
   commits).
 - ✅ Labels enforced — creates missing, updates changed, **removes
   non-standard**.
-- ✅ Branch protection on `main` and `develop` (if created).
+- ✅ Branch protection on `main` and `develop` (if created), with required status checks automatically derived from the CI workflow.
 - ✅ Topics — merged with existing ones.
 - ✅ GitHub Actions secrets — from vault, env, or interactive prompt.
 - ✅ Team access — optionally select teams and assign permissions interactively.
@@ -30,6 +30,11 @@ ghscaff apply
 - ✅ `develop` branch — created if absent.
 
 Safe to run multiple times: every operation is idempotent.
+
+To verify that your required status checks can be satisfied, run:
+```bash
+ghscaff doctor owner/repo
+```
 
 ## Previewing
 

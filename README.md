@@ -37,11 +37,13 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 - **🔄 Idempotent apply mode** — Configure existing repos without recreation
 - **👥 Team access control** — Assign repositories to organization teams with custom permissions (read, triage, write, admin)
 - **🏷️ Enforced labels** — 7 standard labels synced on every run (non-standard labels are removed)
-- **🛡️ Branch protection** — Enforce reviews, status checks, and workflow validation
+- **🛡️ Branch protection** — Enforce reviews, status checks (auto-derived from CI workflows), and workflow validation
+- **💰 Sponsor button** — Enable GitHub Sponsors on new or existing repositories
+- **🏥 Doctor** — Validate that required status checks can be satisfied
 - **🚀 Language templates** — Rust (v1), Python/Node.js/Java coming soon
 - **📝 Boilerplate files** — README, Cargo.toml, CI/CD workflows, LICENSE
 - **🔑 Template secrets** — Automatically configures required GitHub Actions secrets per template
-- **⬆️ Self-update** — Detects new releases on startup and offers one-command upgrade
+- **⬆️ Self-update** — Replaces the running binary on startup; skips binaries installed with `cargo install` (use `cargo install --force` instead)
 
 ---
 
@@ -94,6 +96,17 @@ cargo build --release
 
 Check the [Releases](https://github.com/UniverLab/ghscaff/releases) page for precompiled binaries (Linux x86_64, macOS x86_64/ARM64, Windows x86_64).
 
+### Updates
+
+Ghscaff checks for new releases when it starts. If a newer version is available, it prompts you to update. Choose "yes" to replace the running binary with the latest version.
+
+If you installed ghscaff with `cargo install`, the auto-updater will refuse to touch the binary and instead direct you to run `cargo install --force ghscaff`.
+
+You can disable update checks with:
+```bash
+GHSCAFF_NO_UPDATE_CHECK=1 ghscaff
+```
+
 ### Uninstall
 
 ```bash
@@ -115,6 +128,12 @@ ghscaff new
 
 # Configure an existing repo
 ghscaff apply owner/repo
+
+# Enable GitHub Sponsor button on an existing repo
+ghscaff --sponsor owner/repo
+
+# Validate status checks on a repo
+ghscaff doctor owner/repo
 
 # Preview changes without API calls
 ghscaff --dry-run
@@ -185,10 +204,11 @@ The wizard guides you through **7 interactive steps**:
 Then **automatically**:
 - Creates the repository
 - Commits all boilerplate files in a single atomic commit (`chore: init repository`)
-- Applies branch protection to main (and develop if created)
+- Applies branch protection to main (and develop if created), with required status checks automatically derived from the CI workflow
 - Adds selected teams with their assigned permissions
 - Enforces standard labels (creates missing, updates changed, removes non-standard)
 - Configures required GitHub Actions secrets (from vault, env, or interactive prompt)
+- Offers to enable the GitHub Sponsor button
 
 ---
 
@@ -265,9 +285,20 @@ All files are merged into a single atomic `chore: init repository` commit.
 
 When enabled, applies to the default branch:
 - ✅ Require 1 approval before merging
-- ✅ Require status checks to pass (wired to CI workflow)
+- ✅ Require status checks to pass — **automatically derived from the CI workflow** ghscaff commits
 - ✅ Dismiss stale reviews
 - ✅ Disallow force-push
+
+### Status Check Derivation
+
+Branch protection normally requires you to type the exact names of CI checks that must pass, and those names must match your workflow job names exactly. A typo creates a protection rule that silently guards nothing.
+
+Ghscaff reads the CI workflow it just wrote and derives the required check names from it. If you later rename a job in the workflow, the protection rule automatically refers to the new name on your next `ghscaff apply`.
+
+To verify that your required checks can actually be satisfied, run:
+```bash
+ghscaff doctor owner/repo
+```
 
 ---
 

@@ -19,12 +19,14 @@ Running `ghscaff` with no command starts the creation wizard (same as
 |---|---|
 | `ghscaff` / `ghscaff new` | Create a new GitHub repository with the wizard |
 | `ghscaff apply [owner/repo]` | Configure an existing repository (auto-detected from git remote if omitted) |
+| `ghscaff doctor [owner/repo]` | Verify that required status checks can be satisfied (auto-detected from git remote if omitted) |
 | `ghscaff config` | Reconfigure credentials — wipes the vault and starts fresh |
 
 ## Global flags
 
 | Flag | Description |
 |---|---|
+| `--sponsor OWNER/REPO` | Enable GitHub Sponsor button on an existing repository (shorthand for the `--sponsor` flag) |
 | `--dry-run` | Preview changes without making any API calls |
 | `--help` | Show help for any command |
 | `--version` | Show ghscaff version |
