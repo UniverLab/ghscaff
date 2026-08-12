@@ -8,6 +8,7 @@ mod doctor;
 mod github;
 mod sponsor_cmd;
 mod templates;
+mod updater;
 mod vault;
 mod wizard;
 
@@ -163,7 +164,7 @@ fn check_for_update() {
         println!();
         return;
     }
-    run_installer();
+    run_installer(latest_tag);
 }
 
 fn is_newer(current: &str, latest: &str) -> bool {
@@ -179,9 +180,10 @@ fn is_newer(current: &str, latest: &str) -> bool {
     parse(latest) > parse(current)
 }
 
-fn run_installer() {
+fn run_installer(latest_tag: &str) {
     #[cfg(target_os = "windows")]
     {
+        let _ = latest_tag;
         let _ = std::process::Command::new("powershell")
             .args([
                 "-Command",
@@ -191,19 +193,7 @@ fn run_installer() {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        match std::process::Command::new("sh")
-            .args([
-                "-c",
-                "curl -fsSL https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.sh | sh",
-            ])
-            .status()
-        {
-            Ok(_) => {
-                println!("  \x1b[32m✓\x1b[0m Updated! Restart your terminal to use the new version.");
-                std::process::exit(0);
-            }
-            Err(e) => eprintln!("  ⚠ Installer failed: {e}"),
-        }
+        updater::run_installer(latest_tag);
     }
 }
 
