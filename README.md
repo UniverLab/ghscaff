@@ -21,6 +21,8 @@
 
 Interactive CLI wizard for creating and configuring GitHub repositories. One binary, zero runtime dependencies.
 
+[📖 Project website](https://univerlab.org/ghscaff)
+
 ---
 
 ![Demo](demo/dist/demo.gif)

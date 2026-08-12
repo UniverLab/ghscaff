@@ -5,6 +5,7 @@ edition = "2021"
 description = "Interactive CLI wizard for creating and configuring GitHub repositories"
 license = "MIT"
 repository = "https://github.com/UniverLab/ghscaff"
+homepage = "https://univerlab.org/ghscaff"
 keywords = ["github", "cli", "scaffold", "wizard"]
 categories = ["command-line-utilities", "development-tools"]
 
