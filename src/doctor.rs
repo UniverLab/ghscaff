@@ -445,7 +445,10 @@ mod tests {
         });
         let client = mock_client(&url);
         let result = get_required_contexts(&client, "owner", "repo", "main").unwrap();
-        assert_eq!(result, vec!["ci / Test".to_string(), "ci / Lint".to_string()]);
+        assert_eq!(
+            result,
+            vec!["ci / Test".to_string(), "ci / Lint".to_string()]
+        );
     }
 
     #[test]
@@ -523,7 +526,10 @@ mod tests {
         assert!(result.is_some());
         let (number, checks) = result.unwrap();
         assert_eq!(number, 5);
-        assert_eq!(checks, vec!["ci / Test".to_string(), "legacy/check".to_string()]);
+        assert_eq!(
+            checks,
+            vec!["ci / Test".to_string(), "legacy/check".to_string()]
+        );
     }
 
     #[test]

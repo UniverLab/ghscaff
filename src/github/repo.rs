@@ -528,7 +528,12 @@ mod tests {
             }
         });
         let client = mock_client(&url);
-        let result = set_topics(&client, "owner", "repo", &["rust".to_string(), "cli".to_string()]);
+        let result = set_topics(
+            &client,
+            "owner",
+            "repo",
+            &["rust".to_string(), "cli".to_string()],
+        );
         assert!(result.is_ok());
     }
 
@@ -536,7 +541,10 @@ mod tests {
     fn get_gitignore_template_succeeds() {
         let url = start_mock_server(|path| {
             if path.contains("/gitignore/templates/") {
-                (200, r#"{"source":"Dependency directories\nnode_modules/"}"#.to_string())
+                (
+                    200,
+                    r#"{"source":"Dependency directories\nnode_modules/"}"#.to_string(),
+                )
             } else {
                 (404, r#"{"message":"Not Found"}"#.to_string())
             }
@@ -550,7 +558,10 @@ mod tests {
     fn get_license_template_succeeds() {
         let url = start_mock_server(|path| {
             if path.contains("/licenses/") {
-                (200, r#"{"body":"MIT License\nCopyright (c) [year] [fullname]"}"#.to_string())
+                (
+                    200,
+                    r#"{"body":"MIT License\nCopyright (c) [year] [fullname]"}"#.to_string(),
+                )
             } else {
                 (404, r#"{"message":"Not Found"}"#.to_string())
             }

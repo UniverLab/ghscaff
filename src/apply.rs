@@ -1285,7 +1285,10 @@ mod tests {
     fn check_branch_protection_returns_true_when_enabled() {
         let url = start_mock_server(|path| {
             if path.contains("/branches/") && path.contains("/protection") {
-                (200, r#"{"required_status_checks":{"contexts":[]}}"#.to_string())
+                (
+                    200,
+                    r#"{"required_status_checks":{"contexts":[]}}"#.to_string(),
+                )
             } else {
                 (404, r#"{"message":"Not Found"}"#.to_string())
             }
@@ -1307,13 +1310,17 @@ mod tests {
     fn check_file_exists_returns_true_when_found() {
         let url = start_mock_server(|path| {
             if path.contains("/contents/") {
-                (200, r#"{"name":"ci.yml","path":".github/workflows/ci.yml"}"#.to_string())
+                (
+                    200,
+                    r#"{"name":"ci.yml","path":".github/workflows/ci.yml"}"#.to_string(),
+                )
             } else {
                 (404, r#"{"message":"Not Found"}"#.to_string())
             }
         });
         let client = mock_client(&url);
-        let result = check_file_exists(&client, "owner", "repo", ".github/workflows/ci.yml").unwrap();
+        let result =
+            check_file_exists(&client, "owner", "repo", ".github/workflows/ci.yml").unwrap();
         assert!(result);
     }
 
@@ -1334,15 +1341,27 @@ mod tests {
 
         let url = start_mock_server(move |path| {
             if path.contains("/labels?per_page=100") {
-                (200, r#"[{"name":"bug","color":"d73a4a","description":"Bug"}]"#.to_string())
+                (
+                    200,
+                    r#"[{"name":"bug","color":"d73a4a","description":"Bug"}]"#.to_string(),
+                )
             } else if path.contains("/git/ref/heads/develop") {
                 (404, r#"{"message":"Not Found"}"#.to_string())
             } else if path.contains("/branches/main/protection") {
-                (200, r#"{"required_status_checks":{"contexts":["ci / Test"]}}"#.to_string())
+                (
+                    200,
+                    r#"{"required_status_checks":{"contexts":["ci / Test"]}}"#.to_string(),
+                )
             } else if path.contains("/contents/.github") {
-                (200, format!(r#"{{"content":"{}","encoding":"base64"}}"#, ci_encoded))
+                (
+                    200,
+                    format!(r#"{{"content":"{}","encoding":"base64"}}"#, ci_encoded),
+                )
             } else if path.contains("/contents/Cargo.toml") {
-                (200, format!(r#"{{"content":"{}","encoding":"base64"}}"#, cargo_encoded))
+                (
+                    200,
+                    format!(r#"{{"content":"{}","encoding":"base64"}}"#, cargo_encoded),
+                )
             } else if path == "/repos/owner/repo" {
                 (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":["rust"]}"#.to_string())
             } else {
@@ -1372,13 +1391,20 @@ mod tests {
         let url = start_mock_server(move |path| {
             if path.contains("/labels?per_page=100") {
                 // Return one existing label with different color
-                (200, r#"[{"name":"bug","color":"ff0000","description":"Old desc"}]"#.to_string())
+                (
+                    200,
+                    r#"[{"name":"bug","color":"ff0000","description":"Old desc"}]"#.to_string(),
+                )
             } else if path.contains("/labels") && !path.contains("per_page") {
                 // POST (create) or PATCH (update) or DELETE
                 if path.ends_with("/labels") {
                     // POST - create
                     cc.fetch_add(1, Ordering::SeqCst);
-                    (201, r#"{"name":"feature","color":"a2eeef","description":"New feature"}"#.to_string())
+                    (
+                        201,
+                        r#"{"name":"feature","color":"a2eeef","description":"New feature"}"#
+                            .to_string(),
+                    )
                 } else {
                     // PATCH - update (path has /labels/name)
                     uc.fetch_add(1, Ordering::SeqCst);
@@ -1399,7 +1425,10 @@ mod tests {
     fn sync_labels_dry_run_does_not_modify() {
         let url = start_mock_server(move |path| {
             if path.contains("/labels?per_page=100") {
-                (200, r#"[{"name":"bug","color":"ff0000","description":"Old"}]"#.to_string())
+                (
+                    200,
+                    r#"[{"name":"bug","color":"ff0000","description":"Old"}]"#.to_string(),
+                )
             } else {
                 // Any create/update/delete call means dry_run failed
                 panic!("dry_run should not make write API calls, but got: {path}");
@@ -1469,7 +1498,10 @@ mod tests {
 
         let url = start_mock_server(move |path| {
             if path.contains("/contents/Cargo.toml") {
-                (200, format!(r#"{{"content":"{}","encoding":"base64"}}"#, cargo_encoded))
+                (
+                    200,
+                    format!(r#"{{"content":"{}","encoding":"base64"}}"#, cargo_encoded),
+                )
             } else {
                 (404, r#"{"message":"Not Found"}"#.to_string())
             }

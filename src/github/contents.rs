@@ -832,7 +832,8 @@ mod tests {
             }
         });
         let client = mock_client(&url);
-        let result = fetch_workflow_sources(&client, "owner", "repo", &[".github/workflows/ci.yml"]);
+        let result =
+            fetch_workflow_sources(&client, "owner", "repo", &[".github/workflows/ci.yml"]);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, ".github/workflows/ci.yml");
         assert!(result[0].1.contains("name: CI"));
@@ -842,7 +843,8 @@ mod tests {
     fn fetch_workflow_sources_returns_empty_for_missing_files() {
         let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
         let client = mock_client(&url);
-        let result = fetch_workflow_sources(&client, "owner", "repo", &[".github/workflows/ci.yml"]);
+        let result =
+            fetch_workflow_sources(&client, "owner", "repo", &[".github/workflows/ci.yml"]);
         assert!(result.is_empty());
     }
 
@@ -890,7 +892,10 @@ mod tests {
             } else if path.contains("/git/trees") {
                 (201, r#"{"sha":"tree_sha_xyz"}"#.to_string())
             } else if path.contains("/git/commits") {
-                (201, r#"{"sha":"commit_sha_123","tree":{"sha":"tree_sha_xyz"}}"#.to_string())
+                (
+                    201,
+                    r#"{"sha":"commit_sha_123","tree":{"sha":"tree_sha_xyz"}}"#.to_string(),
+                )
             } else if path.contains("/git/refs") {
                 (201, r#"{"ref":"refs/heads/main","url":"..."}"#.to_string())
             } else {
@@ -926,13 +931,19 @@ mod tests {
                 (404, r#"{"message":"Not Found"}"#.to_string())
             } else if path.contains("/git/commits/existing_sha") {
                 // Parent commit
-                (200, r#"{"sha":"existing_sha","tree":{"sha":"base_tree_sha"}}"#.to_string())
+                (
+                    200,
+                    r#"{"sha":"existing_sha","tree":{"sha":"base_tree_sha"}}"#.to_string(),
+                )
             } else if path.contains("/git/blobs") {
                 (201, r#"{"sha":"blob_sha_abc"}"#.to_string())
             } else if path.contains("/git/trees") {
                 (201, r#"{"sha":"tree_sha_new"}"#.to_string())
             } else if path.contains("/git/commits") && !path.contains("existing_sha") {
-                (201, r#"{"sha":"new_commit_sha","tree":{"sha":"tree_sha_new"}}"#.to_string())
+                (
+                    201,
+                    r#"{"sha":"new_commit_sha","tree":{"sha":"tree_sha_new"}}"#.to_string(),
+                )
             } else if path.contains("/git/refs/heads/main") {
                 (200, r#"{"sha":"new_commit_sha"}"#.to_string())
             } else {

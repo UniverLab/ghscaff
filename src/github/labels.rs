@@ -421,7 +421,10 @@ mod tests {
     fn create_label_succeeds() {
         let url = start_mock_server(|path| {
             if path.contains("/labels") {
-                (201, r#"{"name":"new","color":"ff0000","description":"New label"}"#.to_string())
+                (
+                    201,
+                    r#"{"name":"new","color":"ff0000","description":"New label"}"#.to_string(),
+                )
             } else {
                 (404, r#"{"message":"Not Found"}"#.to_string())
             }
@@ -440,7 +443,10 @@ mod tests {
     fn update_label_succeeds() {
         let url = start_mock_server(|path| {
             if path.contains("/labels/bug") {
-                (200, r#"{"name":"bug","color":"00ff00","description":"Updated"}"#.to_string())
+                (
+                    200,
+                    r#"{"name":"bug","color":"00ff00","description":"Updated"}"#.to_string(),
+                )
             } else {
                 (404, r#"{"message":"Not Found"}"#.to_string())
             }
