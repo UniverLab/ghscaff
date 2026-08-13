@@ -301,10 +301,14 @@ fn execute(
             });
         }
 
-        let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
+        let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())
+            .unwrap_or_else(|_| {
+                eprintln!("  ⚠  Could not fetch .gitignore template from GitHub");
+                String::new()
+            });
         init_files.push(contents::TreeFile {
             path: ".gitignore".into(),
-            content: gitignore,
+            content: templates::assemble_gitignore(&gitignore),
         });
     }
 

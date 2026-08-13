@@ -16,6 +16,48 @@ const SKIP_FILES: &[&str] = &[
     ".gitignore", // replaced by GitHub's official gitignore template via API
 ];
 
+// Comment marking the boundary between the fetched GitHub template and the
+// block below, so a reader of the assembled .gitignore can see where the
+// official template ends.
+const AGENTIC_GITIGNORE_HEADER: &str =
+    "# AI coding agents — mirrors gitkit's `agentic` builtin (src/ignore/mod.rs)\n";
+
+// Patterns for AI coding agent scratch state, appended to every scaffolded
+// repository's .gitignore regardless of language. Kept textually identical
+// to gitkit's `AGENTIC` constant in `src/ignore/mod.rs` (the `builtins`
+// module) — update both together.
+const AGENTIC_GITIGNORE: &str = "\
+.kiro/
+.cursor/
+.windsurf/
+.claude/
+.continue/
+.copilot/
+.kilocode/
+.zencoder/
+.qwen/
+.agents/
+skills-lock.json
+";
+
+/// Appends the agentic-tooling ignore block to a fetched (or empty/failed)
+/// GitHub gitignore template. `fetched` is preserved unmodified as a prefix;
+/// the agentic block always follows, separated by a blank line and a
+/// boundary comment, so it survives even when the template fetch failed and
+/// `fetched` is empty.
+pub fn assemble_gitignore(fetched: &str) -> String {
+    let mut out = String::from(fetched);
+    if !out.is_empty() {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out.push_str(AGENTIC_GITIGNORE_HEADER);
+    out.push_str(AGENTIC_GITIGNORE);
+    out
+}
+
 pub trait LanguageTemplate {
     fn gitignore_name(&self) -> String;
     fn boilerplate_files(&self, name: &str, description: &str, owner: &str) -> Vec<RepoFile>;
@@ -308,6 +350,41 @@ mod tests {
     fn test_resolve_unknown_language() {
         let result = resolve("python", "dummy", false);
         assert!(result.is_err(), "Should fail for unknown language");
+    }
+
+    #[test]
+    fn test_assemble_gitignore_rust_contains_language_and_agentic_patterns() {
+        let fetched = "target/\nCargo.lock\n";
+        let result = assemble_gitignore(fetched);
+        assert!(result.contains("target/"), "missing Rust-specific pattern");
+        assert!(result.contains(".claude/"), "missing agentic pattern");
+    }
+
+    #[test]
+    fn test_assemble_gitignore_preserves_fetched_content_verbatim() {
+        let fetched = "# Rust\ntarget/\nCargo.lock\n**/*.rs.bk\n";
+        let result = assemble_gitignore(fetched);
+        assert!(
+            result.contains(fetched),
+            "fetched template must appear unmodified and in full as a contiguous substring"
+        );
+    }
+
+    #[test]
+    fn test_assemble_gitignore_empty_fetched_still_yields_agentic_block() {
+        let result = assemble_gitignore("");
+        assert!(result.contains(".claude/"));
+        assert!(result.contains(".cursor/"));
+        assert!(result.contains("skills-lock.json"));
+    }
+
+    #[test]
+    fn test_assemble_gitignore_no_pattern_matches_claude_or_agents_md() {
+        let result = assemble_gitignore("target/\n");
+        for line in result.lines() {
+            assert_ne!(line.trim(), "CLAUDE.md", "must not ignore CLAUDE.md");
+            assert_ne!(line.trim(), "AGENTS.md", "must not ignore AGENTS.md");
+        }
     }
 
     #[test]
