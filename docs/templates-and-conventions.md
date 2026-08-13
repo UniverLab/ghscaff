@@ -13,12 +13,40 @@ Each language template includes:
 - **Dependency manifest** — e.g. `Cargo.toml`
 - **Entry point** — boilerplate source file.
 - **README.md** — with placeholders for name and description.
-- **.gitignore** — language-specific (fetched from the GitHub API).
+- **.gitignore** — GitHub's official template for the language, followed by an
+  agentic block (see below).
 - **.github/workflows/ci.yml** — CI workflow with basic checks.
 - **.github/workflows/release.yml** — release workflow (runs on git tags).
 - **LICENSE** — fetched from the API based on the license selected during the wizard.
 
 All files land in a single atomic `chore: init repository` commit.
+
+### The agentic .gitignore block
+
+GitHub's gitignore templates predate AI coding agents, so none of them ignore
+the directories those agents write. Every scaffolded repository therefore gets
+a second block appended after the official template, separated by a blank line
+and a comment marking the boundary:
+
+```gitignore
+# AI coding agents — mirrors gitkit's `agentic` builtin (src/ignore/mod.rs)
+.kiro/
+.cursor/
+...
+```
+
+Two properties worth knowing:
+
+- **The official template is never modified** — it is preserved verbatim as the
+  prefix, and the agentic block only ever follows it.
+- **A failed fetch does not lose the block.** If GitHub's template cannot be
+  retrieved the wizard warns and continues with an empty prefix, so the
+  repository is still born ignoring agent state rather than failing outright.
+
+The list is kept textually identical to gitkit's `agentic` builtin. ghscaff
+carries its own copy rather than depending on gitkit, because a machine that
+scaffolds a repository may not have gitkit installed — but the two must be
+updated together.
 
 Available today: **Rust**. Python, Node.js and Java are planned.
 
