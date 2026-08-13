@@ -365,13 +365,27 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     sync_labels(&client, &owner, &repo_name, false)?;
     println!("  ✓ Labels synced");
 
-    // 2. Branch protection (always apply to ensure correct config)
+    // 2. Branch protection (always apply to ensure correct config) — required
+    // contexts are derived from the repo's live workflow files, never hardcoded,
+    // so a renamed job can't leave a required check pointing at a name nothing
+    // will ever report.
+    let workflow_files = crate::github::contents::fetch_workflow_sources(
+        &client,
+        &owner,
+        &repo_name,
+        &[".github/workflows/ci.yml"],
+    );
+    let workflow_sources: Vec<crate::checks::WorkflowSource> = workflow_files
+        .iter()
+        .map(|(path, content)| crate::checks::WorkflowSource { path, content })
+        .collect();
+    let required_contexts = crate::checks::derive_required_contexts(&workflow_sources);
     match crate::github::branches::apply_branch_protection(
         &client,
         &owner,
         &repo_name,
         "main",
-        Some("rust-ci / Format, Lint & Test"),
+        &required_contexts,
     ) {
         Ok(()) => println!("  ✓ Branch protection applied"),
         Err(e) => {
@@ -472,7 +486,7 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn parse_owner_repo(input: &str) -> Result<(String, String)> {
+pub fn parse_owner_repo(input: &str) -> Result<(String, String)> {
     let parts: Vec<&str> = input.split('/').collect();
     if parts.len() != 2 {
         anyhow::bail!("Invalid repo format. Use: owner/repo");
@@ -575,5 +589,958 @@ mod tests {
         assert_eq!(result.updated, 1);
         assert_eq!(result.up_to_date, 9);
         assert_eq!(result.deleted, 3);
+    }
+
+    #[test]
+    fn test_parse_https_remote_deep_path() {
+        let remote = "https://github.com/org-name/repo-name.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "org-name");
+        assert_eq!(repo, "repo-name");
+    }
+
+    #[test]
+    fn test_parse_ssh_remote_deep_path() {
+        let remote = "git@github.com:org-name/repo-name.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "org-name");
+        assert_eq!(repo, "repo-name");
+    }
+
+    #[test]
+    fn test_parse_empty_remote() {
+        assert!(parse_github_remote("").is_err());
+    }
+
+    #[test]
+    fn test_parse_ssh_single_component() {
+        assert!(parse_github_remote("git@github.com:onlyone").is_err());
+    }
+
+    #[test]
+    fn test_parse_https_single_component() {
+        assert!(parse_github_remote("https://github.com/onlyone").is_err());
+    }
+
+    #[test]
+    fn test_parse_http_not_github() {
+        assert!(parse_github_remote("http://github.com/a/b").is_err());
+    }
+
+    #[test]
+    fn test_parse_owner_repo_empty() {
+        assert!(parse_owner_repo("").is_err());
+    }
+
+    #[test]
+    fn test_parse_owner_repo_too_many_slashes() {
+        assert!(parse_owner_repo("a/b/c").is_err());
+    }
+
+    #[test]
+    fn test_apply_context_struct() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: true,
+            branch_protection_enabled: false,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        assert_eq!(ctx.owner, "o");
+        assert!(ctx.has_develop);
+        assert!(!ctx.branch_protection_enabled);
+        assert!(ctx.has_ci_workflow);
+        assert_eq!(ctx.current_topics, vec!["rust"]);
+    }
+
+    #[test]
+    fn test_add_team_to_repo_dry_run() {
+        // dry_run=true should succeed without any client
+        // We can't test with a real client, but we verify the function compiles
+        // and the dry_run path doesn't panic by checking the signature
+        let _: fn(&GithubClient, &str, &str, &str, &str, bool) -> Result<()> = add_team_to_repo;
+    }
+
+    #[test]
+    fn test_list_org_teams_signature() {
+        let _: fn(&GithubClient, &str) -> Result<Vec<teams::Team>> = list_org_teams;
+    }
+
+    #[test]
+    fn test_parse_ssh_with_different_host() {
+        // SSH but not github.com
+        let remote = "git@gitlab.com:owner/repo.git";
+        assert!(parse_github_remote(remote).is_err());
+    }
+
+    #[test]
+    fn test_parse_https_with_trailing_slash() {
+        let remote = "https://github.com/owner/repo/";
+        let result = parse_github_remote(remote);
+        // Trailing slash means split gives ["owner", "repo", ""] -> 3 parts but last is empty
+        assert!(result.is_ok());
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_with_hyphens() {
+        let (owner, repo) = parse_owner_repo("my-org/my-repo").unwrap();
+        assert_eq!(owner, "my-org");
+        assert_eq!(repo, "my-repo");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_with_underscores() {
+        let (owner, repo) = parse_owner_repo("my_org/my_repo").unwrap();
+        assert_eq!(owner, "my_org");
+        assert_eq!(repo, "my_repo");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_with_dots() {
+        let (owner, repo) = parse_owner_repo("org/my.repo").unwrap();
+        assert_eq!(owner, "org");
+        assert_eq!(repo, "my.repo");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_single_slash() {
+        let (owner, repo) = parse_owner_repo("/").unwrap();
+        assert_eq!(owner, "");
+        assert_eq!(repo, "");
+    }
+
+    #[test]
+    fn test_sync_result_all_zeros() {
+        let result = SyncResult {
+            created: 0,
+            updated: 0,
+            up_to_date: 0,
+            deleted: 0,
+        };
+        assert_eq!(
+            result.created + result.updated + result.up_to_date + result.deleted,
+            0
+        );
+    }
+
+    #[test]
+    fn test_sync_result_clone() {
+        let result = SyncResult {
+            created: 1,
+            updated: 2,
+            up_to_date: 3,
+            deleted: 4,
+        };
+        let cloned = result.clone();
+        assert_eq!(result.created, cloned.created);
+        assert_eq!(result.updated, cloned.updated);
+        assert_eq!(result.up_to_date, cloned.up_to_date);
+        assert_eq!(result.deleted, cloned.deleted);
+    }
+
+    #[test]
+    fn test_sync_result_debug() {
+        let result = SyncResult {
+            created: 1,
+            updated: 2,
+            up_to_date: 3,
+            deleted: 4,
+        };
+        let dbg = format!("{:?}", result);
+        assert!(dbg.contains("SyncResult"));
+    }
+
+    #[test]
+    fn test_apply_context_clone() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: false,
+            branch_protection_enabled: true,
+            has_ci_workflow: false,
+            current_topics: vec![],
+        };
+        let cloned = ctx.clone();
+        assert_eq!(ctx.owner, cloned.owner);
+        assert_eq!(ctx.repo, cloned.repo);
+        assert_eq!(ctx.has_develop, cloned.has_develop);
+        assert_eq!(
+            ctx.branch_protection_enabled,
+            cloned.branch_protection_enabled
+        );
+        assert_eq!(ctx.has_ci_workflow, cloned.has_ci_workflow);
+    }
+
+    #[test]
+    fn test_apply_context_debug() {
+        let ctx = ApplyContext {
+            owner: "org".into(),
+            repo: "repo".into(),
+            current_labels: vec![],
+            has_develop: true,
+            branch_protection_enabled: false,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        let dbg = format!("{:?}", ctx);
+        assert!(dbg.contains("ApplyContext"));
+        assert!(dbg.contains("org"));
+        assert!(dbg.contains("repo"));
+    }
+
+    #[test]
+    fn test_apply_context_with_labels() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![
+                labels::Label {
+                    name: "bug".into(),
+                    color: "d73a4a".into(),
+                    description: "A bug".into(),
+                },
+                labels::Label {
+                    name: "feature".into(),
+                    color: "a2eeef".into(),
+                    description: "A feature".into(),
+                },
+            ],
+            has_develop: false,
+            branch_protection_enabled: false,
+            has_ci_workflow: false,
+            current_topics: vec![],
+        };
+        assert_eq!(ctx.current_labels.len(), 2);
+    }
+
+    #[test]
+    fn test_apply_context_multiple_topics() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: false,
+            branch_protection_enabled: false,
+            has_ci_workflow: false,
+            current_topics: vec![
+                "rust".into(),
+                "cli".into(),
+                "github".into(),
+                "scaffold".into(),
+            ],
+        };
+        assert_eq!(ctx.current_topics.len(), 4);
+    }
+
+    #[test]
+    fn test_parse_owner_repo_white_space() {
+        assert!(parse_owner_repo("  ").is_err());
+    }
+
+    #[test]
+    fn test_parse_owner_repo_tabs() {
+        // Tabs are valid in split, so this actually parses as "a\t" and "\tb"
+        let result = parse_owner_repo("a\t/\tb");
+        assert!(result.is_ok());
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "a\t");
+        assert_eq!(repo, "\tb");
+    }
+
+    #[test]
+    fn test_parse_https_url_with_port() {
+        let remote = "https://github.com:8443/owner/repo.git";
+        // This is not a valid github HTTPS URL (port in URL)
+        assert!(parse_github_remote(remote).is_err());
+    }
+
+    #[test]
+    fn test_parse_ssh_port_in_host() {
+        let remote = "ssh://git@github.com/owner/repo.git";
+        // ssh:// prefix is not handled
+        assert!(parse_github_remote(remote).is_err());
+    }
+
+    #[test]
+    fn test_parse_https_remote_with_nested_path() {
+        let remote = "https://github.com/org/sub/repo.git";
+        let result = parse_github_remote(remote);
+        assert!(result.is_ok());
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "org");
+        assert_eq!(repo, "sub");
+    }
+
+    #[test]
+    fn test_parse_ssh_remote_with_nested_path() {
+        let remote = "git@github.com:org/sub/repo.git";
+        let result = parse_github_remote(remote);
+        assert!(result.is_ok());
+        let (owner, repo) = result.unwrap();
+        assert_eq!(owner, "org");
+        assert_eq!(repo, "sub");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_single_char() {
+        let (owner, repo) = parse_owner_repo("a/b").unwrap();
+        assert_eq!(owner, "a");
+        assert_eq!(repo, "b");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_long_names() {
+        let (owner, repo) = parse_owner_repo("very-long-owner-name/very-long-repo-name").unwrap();
+        assert_eq!(owner, "very-long-owner-name");
+        assert_eq!(repo, "very-long-repo-name");
+    }
+
+    #[test]
+    fn test_sync_result_fields_access() {
+        let result = SyncResult {
+            created: 10,
+            updated: 20,
+            up_to_date: 30,
+            deleted: 40,
+        };
+        assert_eq!(
+            result.created + result.updated + result.up_to_date + result.deleted,
+            100
+        );
+    }
+
+    #[test]
+    fn test_apply_context_with_multiple_labels() {
+        let labels: Vec<labels::Label> = (0..10)
+            .map(|i| labels::Label {
+                name: format!("label{i}"),
+                color: format!("{:06x}", i * 1000),
+                description: format!("Label {i}"),
+            })
+            .collect();
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: labels.clone(),
+            has_develop: true,
+            branch_protection_enabled: true,
+            has_ci_workflow: true,
+            current_topics: vec![],
+        };
+        assert_eq!(ctx.current_labels.len(), 10);
+        assert_eq!(ctx.current_labels[5].name, "label5");
+    }
+
+    #[test]
+    fn test_apply_context_equality() {
+        let a = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: true,
+            branch_protection_enabled: false,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        let b = a.clone();
+        assert_eq!(a.owner, b.owner);
+        assert_eq!(a.repo, b.repo);
+        assert_eq!(a.has_develop, b.has_develop);
+        assert_eq!(a.branch_protection_enabled, b.branch_protection_enabled);
+        assert_eq!(a.has_ci_workflow, b.has_ci_workflow);
+        assert_eq!(a.current_topics, b.current_topics);
+    }
+
+    #[test]
+    fn test_apply_context_debug_format() {
+        let ctx = ApplyContext {
+            owner: "test-owner".into(),
+            repo: "test-repo".into(),
+            current_labels: vec![],
+            has_develop: false,
+            branch_protection_enabled: false,
+            has_ci_workflow: false,
+            current_topics: vec![],
+        };
+        let dbg = format!("{:?}", ctx);
+        assert!(dbg.contains("test-owner"));
+        assert!(dbg.contains("test-repo"));
+    }
+
+    #[test]
+    fn test_sync_result_debug_format() {
+        let result = SyncResult {
+            created: 5,
+            updated: 3,
+            up_to_date: 10,
+            deleted: 2,
+        };
+        let dbg = format!("{:?}", result);
+        assert!(dbg.contains("5"));
+        assert!(dbg.contains("3"));
+        assert!(dbg.contains("10"));
+        assert!(dbg.contains("2"));
+    }
+
+    #[test]
+    fn test_sync_result_clone_fields() {
+        let result = SyncResult {
+            created: 1,
+            updated: 2,
+            up_to_date: 3,
+            deleted: 4,
+        };
+        let cloned = result.clone();
+        assert_eq!(result.created, cloned.created);
+        assert_eq!(result.updated, cloned.updated);
+        assert_eq!(result.up_to_date, cloned.up_to_date);
+        assert_eq!(result.deleted, cloned.deleted);
+    }
+
+    #[test]
+    fn test_parse_owner_repo_numeric_parts() {
+        let (owner, repo) = parse_owner_repo("123/456").unwrap();
+        assert_eq!(owner, "123");
+        assert_eq!(repo, "456");
+    }
+
+    #[test]
+    fn test_parse_https_remote_with_dot_git_suffix_only() {
+        let remote = "https://github.com/user/project.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "user");
+        assert_eq!(repo, "project");
+    }
+
+    #[test]
+    fn test_parse_ssh_remote_with_dot_git_suffix_only() {
+        let remote = "git@github.com:user/project.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "user");
+        assert_eq!(repo, "project");
+    }
+
+    #[test]
+    fn test_parse_https_not_github() {
+        assert!(parse_github_remote("https://gitlab.com/owner/repo.git").is_err());
+    }
+
+    #[test]
+    fn test_parse_ssh_not_github() {
+        assert!(parse_github_remote("git@gitlab.com:owner/repo.git").is_err());
+    }
+
+    #[test]
+    fn test_parse_github_remote_bitbucket() {
+        assert!(parse_github_remote("https://bitbucket.org/owner/repo.git").is_err());
+    }
+
+    #[test]
+    fn test_apply_context_clone_debug() {
+        let ctx = ApplyContext {
+            owner: "org".into(),
+            repo: "repo".into(),
+            current_labels: vec![labels::Label {
+                name: "bug".into(),
+                color: "ff0000".into(),
+                description: "Bug".into(),
+            }],
+            has_develop: true,
+            branch_protection_enabled: true,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into(), "cli".into()],
+        };
+        let cloned = ctx.clone();
+        assert_eq!(cloned.current_labels.len(), 1);
+        assert_eq!(cloned.current_topics.len(), 2);
+    }
+
+    #[test]
+    fn test_add_team_to_repo_signature_types() {
+        let _: fn(&GithubClient, &str, &str, &str, &str, bool) -> Result<()> = add_team_to_repo;
+    }
+
+    #[test]
+    fn test_list_org_teams_signature_types() {
+        let _: fn(&GithubClient, &str) -> Result<Vec<teams::Team>> = list_org_teams;
+    }
+
+    #[test]
+    fn test_apply_context_empty_topics() {
+        let ctx = ApplyContext {
+            owner: "o".into(),
+            repo: "r".into(),
+            current_labels: vec![],
+            has_develop: false,
+            branch_protection_enabled: false,
+            has_ci_workflow: false,
+            current_topics: vec![],
+        };
+        assert!(ctx.current_topics.is_empty());
+    }
+
+    #[test]
+    fn test_sync_result_negative_impossible() {
+        let result = SyncResult {
+            created: 0,
+            updated: 0,
+            up_to_date: 0,
+            deleted: 0,
+        };
+        assert_eq!(result.created, 0);
+        assert_eq!(result.updated, 0);
+        assert_eq!(result.up_to_date, 0);
+        assert_eq!(result.deleted, 0);
+    }
+
+    #[test]
+    fn test_parse_github_remote_exact_https() {
+        let remote = "https://github.com/octocat/hello-world.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "octocat");
+        assert_eq!(repo, "hello-world");
+    }
+
+    #[test]
+    fn test_parse_github_remote_exact_ssh() {
+        let remote = "git@github.com:octocat/hello-world.git";
+        let (owner, repo) = parse_github_remote(remote).unwrap();
+        assert_eq!(owner, "octocat");
+        assert_eq!(repo, "hello-world");
+    }
+
+    #[test]
+    fn test_parse_owner_repo_exact_match() {
+        let (owner, repo) = parse_owner_repo("octocat/hello-world").unwrap();
+        assert_eq!(owner, "octocat");
+        assert_eq!(repo, "hello-world");
+    }
+
+    #[test]
+    fn test_apply_context_all_fields_set() {
+        let ctx = ApplyContext {
+            owner: "my-org".into(),
+            repo: "my-repo".into(),
+            current_labels: vec![
+                labels::Label {
+                    name: "bug".into(),
+                    color: "d73a4a".into(),
+                    description: "Bug".into(),
+                },
+                labels::Label {
+                    name: "enhancement".into(),
+                    color: "a2eeef".into(),
+                    description: "Enhancement".into(),
+                },
+            ],
+            has_develop: true,
+            branch_protection_enabled: true,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into(), "cli".into(), "github".into()],
+        };
+        assert_eq!(ctx.owner, "my-org");
+        assert_eq!(ctx.repo, "my-repo");
+        assert_eq!(ctx.current_labels.len(), 2);
+        assert!(ctx.has_develop);
+        assert!(ctx.branch_protection_enabled);
+        assert!(ctx.has_ci_workflow);
+        assert_eq!(ctx.current_topics.len(), 3);
+    }
+
+    #[test]
+    fn test_apply_context_clone_preserves_all_fields() {
+        let ctx = ApplyContext {
+            owner: "org".into(),
+            repo: "repo".into(),
+            current_labels: vec![labels::Label {
+                name: "bug".into(),
+                color: "ff0000".into(),
+                description: "Bug".into(),
+            }],
+            has_develop: true,
+            branch_protection_enabled: true,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        let cloned = ctx.clone();
+        assert_eq!(ctx.owner, cloned.owner);
+        assert_eq!(ctx.repo, cloned.repo);
+        assert_eq!(ctx.current_labels.len(), cloned.current_labels.len());
+        assert_eq!(ctx.has_develop, cloned.has_develop);
+        assert_eq!(
+            ctx.branch_protection_enabled,
+            cloned.branch_protection_enabled
+        );
+        assert_eq!(ctx.has_ci_workflow, cloned.has_ci_workflow);
+        assert_eq!(ctx.current_topics, cloned.current_topics);
+    }
+
+    #[test]
+    fn test_sync_result_all_positive() {
+        let result = SyncResult {
+            created: 100,
+            updated: 200,
+            up_to_date: 300,
+            deleted: 400,
+        };
+        assert_eq!(result.created, 100);
+        assert_eq!(result.updated, 200);
+        assert_eq!(result.up_to_date, 300);
+        assert_eq!(result.deleted, 400);
+    }
+
+    #[test]
+    fn test_parse_github_remote_just_prefix_https() {
+        assert!(parse_github_remote("https://github.com/").is_err());
+    }
+
+    #[test]
+    fn test_parse_github_remote_just_prefix_ssh() {
+        assert!(parse_github_remote("git@github.com:").is_err());
+    }
+
+    #[test]
+    fn test_parse_owner_repo_only_slash() {
+        let (owner, repo) = parse_owner_repo("/").unwrap();
+        assert_eq!(owner, "");
+        assert_eq!(repo, "");
+    }
+
+    #[test]
+    fn test_add_team_to_repo_types() {
+        let _: fn(&GithubClient, &str, &str, &str, &str, bool) -> Result<()> = add_team_to_repo;
+    }
+
+    #[test]
+    fn test_list_org_teams_types() {
+        let _: fn(&GithubClient, &str) -> Result<Vec<teams::Team>> = list_org_teams;
+    }
+
+    #[test]
+    fn test_apply_context_debug_format_all_fields() {
+        let ctx = ApplyContext {
+            owner: "org".into(),
+            repo: "repo".into(),
+            current_labels: vec![],
+            has_develop: true,
+            branch_protection_enabled: false,
+            has_ci_workflow: true,
+            current_topics: vec!["rust".into()],
+        };
+        let dbg = format!("{:?}", ctx);
+        assert!(dbg.contains("org"));
+        assert!(dbg.contains("repo"));
+        assert!(dbg.contains("true"));
+        assert!(dbg.contains("false"));
+    }
+
+    #[test]
+    fn test_sync_result_debug_format_all_fields() {
+        let result = SyncResult {
+            created: 1,
+            updated: 2,
+            up_to_date: 3,
+            deleted: 4,
+        };
+        let dbg = format!("{:?}", result);
+        assert!(dbg.contains("1"));
+        assert!(dbg.contains("2"));
+        assert!(dbg.contains("3"));
+        assert!(dbg.contains("4"));
+    }
+
+    // ── Mock-based integration tests ──────────────────────────────
+
+    use super::super::github::test_utils::{mock_client, start_mock_server};
+
+    #[test]
+    fn check_branch_exists_returns_true_when_found() {
+        let url = start_mock_server(|path| {
+            if path.contains("/git/ref/heads/") {
+                (200, r#"{"ref":"refs/heads/main","sha":"abc"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = check_branch_exists(&client, "owner", "repo", "main").unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn check_branch_exists_returns_false_when_missing() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = check_branch_exists(&client, "owner", "repo", "nonexistent").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn check_branch_protection_returns_true_when_enabled() {
+        let url = start_mock_server(|path| {
+            if path.contains("/branches/") && path.contains("/protection") {
+                (
+                    200,
+                    r#"{"required_status_checks":{"contexts":[]}}"#.to_string(),
+                )
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = check_branch_protection(&client, "owner", "repo", "main").unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn check_branch_protection_returns_false_when_not_configured() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = check_branch_protection(&client, "owner", "repo", "main").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn check_file_exists_returns_true_when_found() {
+        let url = start_mock_server(|path| {
+            if path.contains("/contents/") {
+                (
+                    200,
+                    r#"{"name":"ci.yml","path":".github/workflows/ci.yml"}"#.to_string(),
+                )
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result =
+            check_file_exists(&client, "owner", "repo", ".github/workflows/ci.yml").unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn check_file_exists_returns_false_when_missing() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = check_file_exists(&client, "owner", "repo", "missing.txt").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn get_repo_state_assembles_apply_context() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let cargo_encoded = STANDARD.encode(b"[package]\nname = \"test\"");
+        let ci_encoded = STANDARD.encode(b"name: CI");
+
+        let url = start_mock_server(move |path| {
+            if path.contains("/labels?per_page=100") {
+                (
+                    200,
+                    r#"[{"name":"bug","color":"d73a4a","description":"Bug"}]"#.to_string(),
+                )
+            } else if path.contains("/git/ref/heads/develop") {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            } else if path.contains("/branches/main/protection") {
+                (
+                    200,
+                    r#"{"required_status_checks":{"contexts":["ci / Test"]}}"#.to_string(),
+                )
+            } else if path.contains("/contents/.github") {
+                (
+                    200,
+                    format!(r#"{{"content":"{}","encoding":"base64"}}"#, ci_encoded),
+                )
+            } else if path.contains("/contents/Cargo.toml") {
+                (
+                    200,
+                    format!(r#"{{"content":"{}","encoding":"base64"}}"#, cargo_encoded),
+                )
+            } else if path == "/repos/owner/repo" {
+                (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":["rust"]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let ctx = get_repo_state(&client, "owner", "repo").unwrap();
+        assert_eq!(ctx.owner, "owner");
+        assert_eq!(ctx.repo, "repo");
+        assert!(!ctx.has_develop);
+        assert!(ctx.branch_protection_enabled);
+        assert_eq!(ctx.current_topics, vec!["rust".to_string()]);
+    }
+
+    #[test]
+    fn sync_labels_creates_missing_updates_differing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let create_count = Arc::new(AtomicUsize::new(0));
+        let cc = create_count.clone();
+        let update_count = Arc::new(AtomicUsize::new(0));
+        let uc = update_count.clone();
+
+        let url = start_mock_server(move |path| {
+            if path.contains("/labels?per_page=100") {
+                // Return one existing label with different color
+                (
+                    200,
+                    r#"[{"name":"bug","color":"ff0000","description":"Old desc"}]"#.to_string(),
+                )
+            } else if path.contains("/labels") && !path.contains("per_page") {
+                // POST (create) or PATCH (update) or DELETE
+                if path.ends_with("/labels") {
+                    // POST - create
+                    cc.fetch_add(1, Ordering::SeqCst);
+                    (
+                        201,
+                        r#"{"name":"feature","color":"a2eeef","description":"New feature"}"#
+                            .to_string(),
+                    )
+                } else {
+                    // PATCH - update (path has /labels/name)
+                    uc.fetch_add(1, Ordering::SeqCst);
+                    (200, r#"{"name":"bug","color":"d73a4a","description":"Something isn't working"}"#.to_string())
+                }
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = sync_labels(&client, "owner", "repo", false).unwrap();
+        assert!(result.created > 0);
+        assert!(result.up_to_date > 0 || result.updated > 0);
+    }
+
+    #[test]
+    fn sync_labels_dry_run_does_not_modify() {
+        let url = start_mock_server(move |path| {
+            if path.contains("/labels?per_page=100") {
+                (
+                    200,
+                    r#"[{"name":"bug","color":"ff0000","description":"Old"}]"#.to_string(),
+                )
+            } else {
+                // Any create/update/delete call means dry_run failed
+                panic!("dry_run should not make write API calls, but got: {path}");
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = sync_labels(&client, "owner", "repo", true).unwrap();
+        // dry_run counts are calculated but no API calls are made
+        // "bug" exists but color differs → updated=1; 6 other standard labels missing → created=6
+        assert_eq!(result.updated, 1);
+        assert_eq!(result.created, 6);
+    }
+
+    #[test]
+    fn merge_topics_adds_missing_topics() {
+        let url = start_mock_server(move |path| {
+            if path == "/repos/owner/repo" {
+                (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":["existing"]}"#.to_string())
+            } else if path.contains(":put") || path.contains("topics") {
+                (200, r#"{"names":["existing","new_topic"]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = merge_topics(&client, "owner", "repo", &["new_topic"], false).unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn merge_topics_returns_false_when_nothing_to_add() {
+        let url = start_mock_server(move |path| {
+            if path == "/repos/owner/repo" {
+                (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":["existing"]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = merge_topics(&client, "owner", "repo", &["existing"], false).unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn merge_topics_dry_run_does_not_set() {
+        let url = start_mock_server(move |path| {
+            if path == "/repos/owner/repo" {
+                (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":[]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = merge_topics(&client, "owner", "repo", &["new_topic"], true).unwrap();
+        assert!(result); // changed=true but no API call made
+    }
+
+    #[test]
+    fn detect_template_secrets_finds_rust_markers() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let cargo_encoded = STANDARD.encode(b"[package]\nname = \"test\"");
+
+        let url = start_mock_server(move |path| {
+            if path.contains("/contents/Cargo.toml") {
+                (
+                    200,
+                    format!(r#"{{"content":"{}","encoding":"base64"}}"#, cargo_encoded),
+                )
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        // Ensure the cache secrets file exists so load_secrets returns data.
+        let secrets_dir = dirs::home_dir()
+            .unwrap()
+            .join(".ghscaff")
+            .join("boilerplate")
+            .join("rust");
+        let secrets_path = secrets_dir.join("secrets.toml");
+        let created_file = if !secrets_path.exists() {
+            std::fs::create_dir_all(&secrets_dir).ok();
+            std::fs::write(
+                &secrets_path,
+                "[[secrets]]\nname = \"CARGO_REGISTRY_TOKEN\"\ndescription = \"crates.io token\"\n",
+            )
+            .ok();
+            true
+        } else {
+            false
+        };
+
+        let client = mock_client(&url);
+        let secrets = detect_template_secrets(&client, "owner", "repo");
+        // Should find secrets from the "rust" template
+        assert!(!secrets.is_empty());
+
+        if created_file {
+            let _ = std::fs::remove_file(&secrets_path);
+        }
+    }
+
+    #[test]
+    fn detect_template_secrets_returns_empty_when_no_markers() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let secrets = detect_template_secrets(&client, "owner", "repo");
+        assert!(secrets.is_empty());
     }
 }

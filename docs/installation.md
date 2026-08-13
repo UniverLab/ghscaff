@@ -55,8 +55,17 @@ x86_64 are published on the
 
 ## Self-update
 
-Ghscaff checks for new releases on startup and offers a one-command
-upgrade when one is available.
+Ghscaff checks for new releases on startup. When a newer version is available, it prompts you to update. Choose "yes" to replace the running binary with the latest version.
+
+If you installed ghscaff with `cargo install`, the auto-updater will refuse to touch the binary and instead direct you to run:
+```bash
+cargo install --force ghscaff
+```
+
+You can disable update checks by setting the environment variable:
+```bash
+GHSCAFF_NO_UPDATE_CHECK=1 ghscaff
+```
 
 ## Uninstall
 

@@ -24,10 +24,12 @@ existing repositories at any time.
 - **Idempotent apply mode** — configure existing repos without recreation.
 - **Team access control** — assign org teams with custom permissions.
 - **Enforced labels** — a standard label set synced on every run.
-- **Branch protection** — reviews, status checks, no force-push.
+- **Branch protection** — reviews, status checks (auto-derived from workflows), no force-push.
+- **Sponsor button** — enable GitHub Sponsors with a single command.
+- **Doctor** — validate that required status checks can be satisfied.
 - **Language templates** — Rust today; Python, Node.js and Java coming.
 - **Template secrets** — required Actions secrets configured automatically.
-- **Self-update** — detects new releases on startup.
+- **Self-update** — replaces the running binary; handles `cargo install` specially.
 
 ## How the documentation is organized
 

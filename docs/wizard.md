@@ -27,13 +27,15 @@ Ghscaff then performs the full setup automatically:
 - Commits all boilerplate files in a **single atomic commit**
   (`chore: init repository`) — no noisy per-file commits.
 - Applies [branch protection](templates-and-conventions.md#branch-protection)
-  to `main` (and `develop` if created).
+  to `main` (and `develop` if created), with required status checks
+  automatically derived from the CI workflow.
 - Adds the selected teams with their assigned permissions.
 - Enforces the [standard label set](templates-and-conventions.md#standard-labels)
   — creates missing, updates changed, removes non-standard.
 - Configures required GitHub Actions
   [secrets](templates-and-conventions.md#secrets) from the vault,
   environment, or an interactive prompt.
+- Offers to enable the GitHub Sponsor button.
 
 Every one of these operations is idempotent — if something already
 matches, it is skipped, which is what makes

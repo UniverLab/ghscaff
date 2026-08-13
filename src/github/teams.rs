@@ -132,4 +132,220 @@ mod tests {
         assert_eq!(access.team_slug, cloned.team_slug);
         assert_eq!(access.permission, cloned.permission);
     }
+
+    #[test]
+    fn test_team_deserialize() {
+        let json = r#"{"name":"frontend","slug":"frontend","description":"Frontend team"}"#;
+        let team: Team = serde_json::from_str(json).unwrap();
+        assert_eq!(team.name, "frontend");
+        assert_eq!(team.slug, "frontend");
+        assert_eq!(team.description.as_deref(), Some("Frontend team"));
+    }
+
+    #[test]
+    fn test_team_deserialize_no_description() {
+        let json = r#"{"name":"devops","slug":"devops"}"#;
+        let team: Team = serde_json::from_str(json).unwrap();
+        assert_eq!(team.name, "devops");
+        assert!(team.description.is_none());
+    }
+
+    #[test]
+    fn test_team_deserialize_real_github() {
+        let json = r#"{
+            "id": 1,
+            "node_id": "MDQ6VGVhbTE=",
+            "url": "https://api.github.com/orgs/octocat/teams/frontend",
+            "name": "Frontend Team",
+            "slug": "frontend",
+            "description": "Frontend developers",
+            "privacy": "closed",
+            "permission": "admin",
+            "members_url": "https://api.github.com/orgs/octocat/teams/frontend/members{/member}",
+            "repositories_url": "https://api.github.com/orgs/octocat/teams/frontend/repos",
+            "parent": null
+        }"#;
+        let team: Team = serde_json::from_str(json).unwrap();
+        assert_eq!(team.name, "Frontend Team");
+        assert_eq!(team.slug, "frontend");
+        assert_eq!(team.description.as_deref(), Some("Frontend developers"));
+    }
+
+    #[test]
+    fn test_add_team_body_all_permissions() {
+        for perm in &["pull", "triage", "push", "admin"] {
+            let body = AddTeamBody {
+                permission: perm.to_string(),
+            };
+            let json = serde_json::to_string(&body).unwrap();
+            assert!(json.contains(&format!("\"permission\":\"{}\"", perm)));
+        }
+    }
+
+    #[test]
+    fn test_team_access_debug() {
+        let access = TeamAccess {
+            team_slug: "my-team".to_string(),
+            permission: "admin".to_string(),
+        };
+        let dbg = format!("{:?}", access);
+        assert!(dbg.contains("TeamAccess"));
+        assert!(dbg.contains("my-team"));
+    }
+
+    #[test]
+    fn test_team_debug() {
+        let team = Team {
+            name: "test".to_string(),
+            slug: "test".to_string(),
+            description: None,
+        };
+        let dbg = format!("{:?}", team);
+        assert!(dbg.contains("Team"));
+        assert!(dbg.contains("test"));
+    }
+
+    #[test]
+    fn test_team_access_empty_strings() {
+        let access = TeamAccess {
+            team_slug: String::new(),
+            permission: String::new(),
+        };
+        assert!(access.team_slug.is_empty());
+        assert!(access.permission.is_empty());
+    }
+
+    #[test]
+    fn test_team_empty_name() {
+        let team = Team {
+            name: String::new(),
+            slug: String::new(),
+            description: None,
+        };
+        assert!(team.name.is_empty());
+        assert!(team.slug.is_empty());
+    }
+
+    #[test]
+    fn test_list_teams_signature() {
+        let _: fn(&GithubClient) -> Result<Vec<Team>> = list_teams;
+    }
+
+    #[test]
+    fn test_add_team_to_repo_signature() {
+        let _: fn(&GithubClient, &str, &str, &str, &str) -> Result<()> = add_team_to_repo;
+    }
+
+    #[test]
+    fn test_team_deserialize_with_parent() {
+        let json = r#"{
+            "name": "frontend",
+            "slug": "frontend",
+            "description": "Frontend team",
+            "parent": null
+        }"#;
+        let team: Team = serde_json::from_str(json).unwrap();
+        assert_eq!(team.name, "frontend");
+        assert_eq!(team.slug, "frontend");
+    }
+
+    #[test]
+    fn test_team_access_all_permission_types_debug() {
+        for perm in &["pull", "triage", "push", "admin"] {
+            let access = TeamAccess {
+                team_slug: "team".to_string(),
+                permission: perm.to_string(),
+            };
+            let dbg = format!("{:?}", access);
+            assert!(dbg.contains(perm));
+        }
+    }
+
+    #[test]
+    fn test_add_team_body_serialization_admin() {
+        let body = AddTeamBody {
+            permission: "admin".to_string(),
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"admin\""));
+    }
+
+    #[test]
+    fn test_team_access_clone_preserves_fields() {
+        let access = TeamAccess {
+            team_slug: "my-team".to_string(),
+            permission: "triage".to_string(),
+        };
+        let cloned = access.clone();
+        assert_eq!(access.team_slug, cloned.team_slug);
+        assert_eq!(access.permission, cloned.permission);
+    }
+
+    #[test]
+    fn test_team_clone_preserves_all() {
+        let team = Team {
+            name: "design".to_string(),
+            slug: "design".to_string(),
+            description: Some("Design team".to_string()),
+        };
+        let cloned = team.clone();
+        assert_eq!(team.name, cloned.name);
+        assert_eq!(team.slug, cloned.slug);
+        assert_eq!(team.description, cloned.description);
+    }
+
+    #[test]
+    fn test_team_deserialize_unicode() {
+        let json = r#"{"name":"開発チーム","slug":"dev-team","description":"Development"}"#;
+        let team: Team = serde_json::from_str(json).unwrap();
+        assert_eq!(team.name, "開発チーム");
+    }
+
+    // ── Mock-based integration tests ──────────────────────────────
+
+    use super::super::test_utils::{mock_client, start_mock_server};
+
+    #[test]
+    fn list_teams_returns_teams() {
+        let url = start_mock_server(|path| {
+            if path == "/user/teams" {
+                (200, r#"[{"name":"Backend","slug":"backend","description":"Backend team"},{"name":"DevOps","slug":"devops","description":null}]"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let teams = list_teams(&client).unwrap();
+        assert_eq!(teams.len(), 2);
+        assert_eq!(teams[0].slug, "backend");
+        assert_eq!(teams[1].slug, "devops");
+    }
+
+    #[test]
+    fn add_team_to_repo_succeeds() {
+        let url = start_mock_server(|path| {
+            if path.contains("/teams/") && path.contains("/repos/") {
+                (204, String::new())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = add_team_to_repo(&client, "org", "repo", "backend", "push");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn list_teams_returns_empty_when_no_teams() {
+        let url = start_mock_server(|path| {
+            if path == "/user/teams" {
+                (200, r#"[]"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let teams = list_teams(&client).unwrap();
+        assert!(teams.is_empty());
+    }
 }

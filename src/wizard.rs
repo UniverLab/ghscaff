@@ -4,7 +4,7 @@ use inquire::{Confirm, MultiSelect, Password, Select, Text};
 use crate::github::{
     branches,
     client::{resolve_token, GithubClient},
-    contents, labels, repo, secrets, teams,
+    contents, labels, repo, secrets, sponsors, teams,
 };
 use crate::templates;
 
@@ -301,10 +301,14 @@ fn execute(
             });
         }
 
-        let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
+        let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())
+            .unwrap_or_else(|_| {
+                eprintln!("  ⚠  Could not fetch .gitignore template from GitHub");
+                String::new()
+            });
         init_files.push(contents::TreeFile {
             path: ".gitignore".into(),
-            content: gitignore,
+            content: templates::assemble_gitignore(&gitignore),
         });
     }
 
@@ -352,21 +356,33 @@ fn execute(
         });
     }
 
-    // 5. Branch protection
-    let ci_check = c
-        .language
-        .as_deref()
-        .map(|_| "rust-ci / Format, Lint & Test");
+    // 5. Branch protection — required contexts are derived from the workflow
+    // files just committed, never hardcoded, so a renamed job can't leave a
+    // required check pointing at a name nothing will ever report.
+    let workflow_sources: Vec<crate::checks::WorkflowSource> = init_files
+        .iter()
+        .map(|f| crate::checks::WorkflowSource {
+            path: &f.path,
+            content: &f.content,
+        })
+        .collect();
+    let required_contexts = crate::checks::derive_required_contexts(&workflow_sources);
     step!(
         &format!("apply branch protection ({})", c.default_branch),
         {
-            branches::apply_branch_protection(client, owner, name, &c.default_branch, ci_check)?;
+            branches::apply_branch_protection(
+                client,
+                owner,
+                name,
+                &c.default_branch,
+                &required_contexts,
+            )?;
             Ok::<(), anyhow::Error>(())
         }
     );
     if c.create_develop {
         step!("apply branch protection (develop)", {
-            branches::apply_branch_protection(client, owner, name, "develop", ci_check)?;
+            branches::apply_branch_protection(client, owner, name, "develop", &required_contexts)?;
             Ok::<(), anyhow::Error>(())
         });
     }
@@ -443,10 +459,59 @@ fn execute(
     if !dry_run {
         if let Some(_r) = &created_repo {
             offer_gitkit_clone(owner, name);
+            offer_sponsor_button(client, owner, name);
         }
     }
 
     Ok(())
+}
+
+/// Which way the user answered the Sponsor-button prompt, or that there was
+/// no way to ask (non-interactive run — no TTY, or an explicit cancel).
+enum SponsorAnswer {
+    Yes,
+    No,
+    Skipped,
+}
+
+fn ask_sponsor_button() -> SponsorAnswer {
+    match Confirm::new("Enable the Sponsor button for this repository?")
+        .with_default(false)
+        .prompt()
+    {
+        Ok(true) => SponsorAnswer::Yes,
+        Ok(false) => SponsorAnswer::No,
+        Err(_) => SponsorAnswer::Skipped,
+    }
+}
+
+/// Asks whether to enable the GitHub Sponsor button and, only on an explicit
+/// "yes", calls GS1's `enable_sponsorships`. A non-interactive run (no TTY)
+/// or a "no" answer leaves the repository untouched — the repo is already
+/// created and configured, so this step never fails the scaffold.
+fn offer_sponsor_button(client: &GithubClient, owner: &str, name: &str) {
+    apply_sponsor_answer(ask_sponsor_button(), || {
+        sponsors::enable_sponsorships(client, owner, name)
+    });
+}
+
+fn apply_sponsor_answer(
+    answer: SponsorAnswer,
+    enable: impl FnOnce() -> Result<sponsors::SponsorshipStatus>,
+) {
+    if !matches!(answer, SponsorAnswer::Yes) {
+        return;
+    }
+    print!("  Enabling Sponsor button... ");
+    println!("{}", sponsor_outcome_message(&enable()));
+}
+
+fn sponsor_outcome_message(result: &Result<sponsors::SponsorshipStatus>) -> String {
+    match result {
+        Ok(sponsors::SponsorshipStatus::Enabled) => "ok".to_string(),
+        Ok(sponsors::SponsorshipStatus::AlreadyEnabled) => "ok  (already enabled)".to_string(),
+        Err(e) => format!("failed: {e}"),
+    }
 }
 
 fn offer_gitkit_clone(owner: &str, repo: &str) {
@@ -785,5 +850,409 @@ mod tests {
         // Total: 10
         let steps = count_steps(&config, &secret_specs);
         assert_eq!(steps, 10);
+    }
+
+    #[test]
+    fn test_is_command_available_existing() {
+        assert!(is_command_available("sh"));
+    }
+
+    #[test]
+    fn test_is_command_available_nonexistent() {
+        assert!(!is_command_available(
+            "definitely-not-a-real-command-xyz123"
+        ));
+    }
+
+    #[test]
+    fn test_current_year_numeric_value() {
+        let year: u64 = current_year().parse().unwrap();
+        assert!(year >= 2025);
+        assert!(year <= 2200);
+    }
+
+    #[test]
+    fn test_current_year_length() {
+        let y = current_year();
+        assert!(y.len() >= 4);
+        assert!(y.len() <= 5);
+    }
+
+    #[test]
+    fn test_count_steps_no_language_no_license() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        // 1: create repo
+        // 3: protect main
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 2);
+    }
+
+    #[test]
+    fn test_count_steps_only_develop() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: true,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        // 1: create repo
+        // 3: create develop
+        // 4: protect develop
+        // 5: protect main
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 4);
+    }
+
+    #[test]
+    fn test_count_steps_only_labels() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: true,
+            team_access: vec![],
+        };
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 3);
+    }
+
+    #[test]
+    fn test_count_steps_only_topics() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["rust".to_string()],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 3);
+    }
+
+    #[test]
+    fn test_count_steps_only_secrets() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        let secrets = vec![templates::SecretSpec {
+            name: "KEY".to_string(),
+            description: "d".to_string(),
+            required: true,
+        }];
+        let steps = count_steps(&config, &secrets);
+        assert_eq!(steps, 3);
+    }
+
+    #[test]
+    fn test_count_steps_many_teams() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "org".to_string(),
+            is_org: true,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: (0..5)
+                .map(|i| teams::TeamAccess {
+                    team_slug: format!("t{i}"),
+                    permission: "push".to_string(),
+                })
+                .collect(),
+        };
+        let steps = count_steps(&config, &[]);
+        assert_eq!(steps, 7);
+    }
+
+    #[test]
+    fn test_count_steps_many_secrets() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        let secrets: Vec<templates::SecretSpec> = (0..3)
+            .map(|i| templates::SecretSpec {
+                name: format!("S{i}"),
+                description: format!("d{i}"),
+                required: false,
+            })
+            .collect();
+        let steps = count_steps(&config, &secrets);
+        assert_eq!(steps, 5);
+    }
+
+    #[test]
+    fn test_is_command_available_ls() {
+        assert!(is_command_available("ls"));
+    }
+
+    #[test]
+    fn test_is_command_available_cat() {
+        assert!(is_command_available("cat"));
+    }
+
+    #[test]
+    fn test_is_command_available_with_path_characters() {
+        assert!(!is_command_available("/usr/bin/definitely-fake"));
+    }
+
+    #[test]
+    fn test_wizard_config_clone() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["rust".to_string()],
+            private: true,
+            owner: "org".to_string(),
+            is_org: true,
+            language: Some("rust".to_string()),
+            default_branch: "develop".to_string(),
+            create_develop: true,
+            license: Some("MIT".to_string()),
+            create_labels: true,
+            team_access: vec![teams::TeamAccess {
+                team_slug: "t".to_string(),
+                permission: "push".to_string(),
+            }],
+        };
+        assert_eq!(config.name, "repo");
+        assert_eq!(config.description, "test");
+        assert_eq!(config.topics, vec!["rust"]);
+        assert!(config.private);
+        assert_eq!(config.owner, "org");
+        assert!(config.is_org);
+        assert_eq!(config.language, Some("rust".to_string()));
+        assert_eq!(config.default_branch, "develop");
+        assert!(config.create_develop);
+        assert_eq!(config.license, Some("MIT".to_string()));
+        assert!(config.create_labels);
+        assert_eq!(config.team_access.len(), 1);
+    }
+
+    #[test]
+    fn test_wizard_config_minimal() {
+        let config = WizardConfig {
+            name: String::new(),
+            description: String::new(),
+            topics: vec![],
+            private: false,
+            owner: String::new(),
+            is_org: false,
+            language: None,
+            default_branch: String::new(),
+            create_develop: false,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        assert!(config.name.is_empty());
+        assert!(config.topics.is_empty());
+        assert!(!config.private);
+        assert!(!config.is_org);
+        assert!(config.language.is_none());
+        assert!(!config.create_develop);
+        assert!(config.license.is_none());
+        assert!(!config.create_labels);
+        assert!(config.team_access.is_empty());
+    }
+
+    #[test]
+    fn test_count_steps_develop_no_files() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec![],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: true,
+            license: None,
+            create_labels: false,
+            team_access: vec![],
+        };
+        let steps = count_steps(&config, &[]);
+        // create repo + create develop + protect develop + protect main = 4
+        assert_eq!(steps, 4);
+    }
+
+    #[test]
+    fn test_count_steps_labels_and_topics_and_secrets() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["rust".to_string(), "cli".to_string()],
+            private: false,
+            owner: "user".to_string(),
+            is_org: false,
+            language: None,
+            default_branch: "main".to_string(),
+            create_develop: false,
+            license: None,
+            create_labels: true,
+            team_access: vec![],
+        };
+        let secrets = vec![templates::SecretSpec {
+            name: "K".to_string(),
+            description: "D".to_string(),
+            required: true,
+        }];
+        let steps = count_steps(&config, &secrets);
+        // create repo + protect main + labels + topics + secret = 5
+        assert_eq!(steps, 5);
+    }
+
+    #[test]
+    fn test_count_steps_everything_enabled() {
+        let config = WizardConfig {
+            name: "repo".to_string(),
+            description: "test".to_string(),
+            topics: vec!["a".to_string()],
+            private: true,
+            owner: "org".to_string(),
+            is_org: true,
+            language: Some("rust".to_string()),
+            default_branch: "main".to_string(),
+            create_develop: true,
+            license: Some("MIT".to_string()),
+            create_labels: true,
+            team_access: (0..3)
+                .map(|i| teams::TeamAccess {
+                    team_slug: format!("t{i}"),
+                    permission: "push".to_string(),
+                })
+                .collect(),
+        };
+        let secrets = vec![
+            templates::SecretSpec {
+                name: "S1".to_string(),
+                description: "D1".to_string(),
+                required: true,
+            },
+            templates::SecretSpec {
+                name: "S2".to_string(),
+                description: "D2".to_string(),
+                required: false,
+            },
+        ];
+        let steps = count_steps(&config, &secrets);
+        // create repo + init commit + create develop + protect develop + protect main
+        // + labels + topics + 3 teams + 2 secrets = 12
+        assert_eq!(steps, 12);
+    }
+
+    #[test]
+    fn test_banner_is_const_str() {
+        assert!(!BANNER.is_empty());
+        assert!(BANNER.contains("██"));
+    }
+
+    #[test]
+    fn test_apply_sponsor_answer_yes_calls_enable() {
+        let called = std::cell::Cell::new(false);
+        apply_sponsor_answer(SponsorAnswer::Yes, || {
+            called.set(true);
+            Ok(sponsors::SponsorshipStatus::Enabled)
+        });
+        assert!(called.get(), "answering yes must invoke GS1's function");
+    }
+
+    #[test]
+    fn test_apply_sponsor_answer_no_skips_enable() {
+        apply_sponsor_answer(
+            SponsorAnswer::No,
+            || -> Result<sponsors::SponsorshipStatus> {
+                panic!("answering no must never call GS1's function")
+            },
+        );
+    }
+
+    #[test]
+    fn test_apply_sponsor_answer_skipped_skips_enable() {
+        apply_sponsor_answer(
+            SponsorAnswer::Skipped,
+            || -> Result<sponsors::SponsorshipStatus> {
+                panic!("a non-interactive run must never call GS1's function")
+            },
+        );
+    }
+
+    #[test]
+    fn test_sponsor_outcome_message_enabled() {
+        let result = Ok(sponsors::SponsorshipStatus::Enabled);
+        assert_eq!(sponsor_outcome_message(&result), "ok");
+    }
+
+    #[test]
+    fn test_sponsor_outcome_message_already_enabled() {
+        let result = Ok(sponsors::SponsorshipStatus::AlreadyEnabled);
+        assert_eq!(sponsor_outcome_message(&result), "ok  (already enabled)");
+    }
+
+    #[test]
+    fn test_sponsor_outcome_message_error() {
+        let result: Result<sponsors::SponsorshipStatus> = Err(anyhow::anyhow!("boom"));
+        assert_eq!(sponsor_outcome_message(&result), "failed: boom");
     }
 }
