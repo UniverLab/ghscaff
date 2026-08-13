@@ -1507,10 +1507,33 @@ mod tests {
             }
         });
 
+        // Ensure the cache secrets file exists so load_secrets returns data.
+        let secrets_dir = dirs::home_dir()
+            .unwrap()
+            .join(".ghscaff")
+            .join("boilerplate")
+            .join("rust");
+        let secrets_path = secrets_dir.join("secrets.toml");
+        let created_file = if !secrets_path.exists() {
+            std::fs::create_dir_all(&secrets_dir).ok();
+            std::fs::write(
+                &secrets_path,
+                "[[secrets]]\nname = \"CARGO_REGISTRY_TOKEN\"\ndescription = \"crates.io token\"\n",
+            )
+            .ok();
+            true
+        } else {
+            false
+        };
+
         let client = mock_client(&url);
         let secrets = detect_template_secrets(&client, "owner", "repo");
         // Should find secrets from the "rust" template
         assert!(!secrets.is_empty());
+
+        if created_file {
+            let _ = std::fs::remove_file(&secrets_path);
+        }
     }
 
     #[test]
