@@ -76,8 +76,15 @@ fn save_to_path(data: &VaultData, passphrase: &str, path: &Path) -> Result<()> {
     blob.extend_from_slice(&nonce_bytes);
     blob.extend_from_slice(&ciphertext);
 
-    // Atomic write: write to temp file then rename
-    let tmp_path = path.with_extension("enc.tmp");
+    // Atomic write: write to a writer-unique temp file, then rename. The
+    // suffix must be unique per writer (not just per path) — two processes
+    // racing to write the same vault path with a shared, fixed temp name
+    // can interleave their writes and corrupt the file before either
+    // rename() runs.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = path.with_extension(format!("enc.tmp.{}.{unique}", std::process::id()));
     std::fs::write(&tmp_path, &blob)?;
 
     #[cfg(unix)]
@@ -1222,19 +1229,50 @@ mod tests {
     use std::sync::Mutex;
     static VAULT_MUTEX: Mutex<()> = Mutex::new(());
 
+    /// Points `HOME` (and thus `vault_path()`) at a private temp directory
+    /// for the lifetime of the guard, restoring the previous value on drop.
+    ///
+    /// `save`/`load`/`destroy`/`exists`/`save_secret` all resolve their file
+    /// location via `dirs::home_dir()`, which reads `HOME`. Pointing every
+    /// wrapper-level test at the developer's *real* `~/.ghscaff/vault.enc`
+    /// meant concurrent test processes (nextest runs one process per test)
+    /// raced on the same file and intermittently corrupted it. Overriding
+    /// `HOME` per test removes the shared mutable state instead of trying to
+    /// serialize access to it — `_dir` is kept alive only to defer cleanup
+    /// until the guard drops.
+    struct HomeGuard {
+        _dir: tempfile::TempDir,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl HomeGuard {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("HOME");
+            // SAFETY: guarded by VAULT_MUTEX, so no other thread in this
+            // process observes or mutates HOME concurrently.
+            unsafe { std::env::set_var("HOME", dir.path()) };
+            Self {
+                _dir: dir,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: same guarantee as in `new` — still under VAULT_MUTEX.
+            match self.previous.take() {
+                Some(home) => unsafe { std::env::set_var("HOME", home) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
+
     #[test]
     fn test_save_load_via_wrappers_with_backup() {
         let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let home = dirs::home_dir().unwrap();
-        let vault_dir = home.join(".ghscaff");
-        let vault_file = vault_dir.join("vault.enc");
-        let backup_file = vault_dir.join("vault.enc.bak_save_load");
-
-        let had_vault = vault_file.exists();
-        if had_vault {
-            std::fs::copy(&vault_file, &backup_file).unwrap();
-        }
-        std::fs::create_dir_all(&vault_dir).ok();
+        let _home = HomeGuard::new();
 
         let data = VaultData {
             github_token: Some("ghp_wrapper_test".into()),
@@ -1245,109 +1283,48 @@ mod tests {
         let loaded = load("").unwrap().unwrap();
         assert_eq!(loaded.github_token.as_deref(), Some("ghp_wrapper_test"));
         assert_eq!(loaded.secrets.get("WK").unwrap(), "WV");
-
-        if had_vault {
-            std::fs::copy(&backup_file, &vault_file).unwrap();
-            let _ = std::fs::remove_file(&backup_file);
-        } else {
-            let _ = std::fs::remove_file(&vault_file);
-        }
     }
 
     #[test]
     fn test_destroy_nonexistent_returns_false() {
         let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let home = dirs::home_dir().unwrap();
-        let vault_file = home.join(".ghscaff").join("vault.enc");
-        let backup = home.join(".ghscaff").join("vault.enc.bak_dstr_false");
+        let _home = HomeGuard::new();
 
-        let had = vault_file.exists();
-        if had {
-            std::fs::copy(&vault_file, &backup).unwrap();
-            let _ = std::fs::remove_file(&vault_file);
-        }
-
-        assert!(!vault_file.exists());
+        assert!(!exists());
         let result = destroy().unwrap();
         assert!(!result);
-
-        if had {
-            let _ = std::fs::copy(&backup, &vault_file);
-            let _ = std::fs::remove_file(&backup);
-        }
     }
 
     #[test]
     fn test_destroy_existing_returns_true() {
         let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let home = dirs::home_dir().unwrap();
-        let vault_file = home.join(".ghscaff").join("vault.enc");
-        let backup = home.join(".ghscaff").join("vault.enc.bak_dstr_true");
+        let _home = HomeGuard::new();
 
-        let had = vault_file.exists();
-        if had {
-            std::fs::copy(&vault_file, &backup).unwrap();
-        }
-        std::fs::create_dir_all(home.join(".ghscaff")).ok();
-
-        save_to_path(&VaultData::default(), "", &vault_file).unwrap();
-        assert!(vault_file.exists());
+        save(&VaultData::default(), "").unwrap();
+        assert!(exists());
         let result = destroy().unwrap();
         assert!(result);
-        assert!(!vault_file.exists());
-
-        if had {
-            let _ = std::fs::copy(&backup, &vault_file);
-            let _ = std::fs::remove_file(&backup);
-        }
+        assert!(!exists());
     }
 
     #[test]
     fn test_save_secret_public_api_with_backup() {
         let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let home = dirs::home_dir().unwrap();
-        let vault_file = home.join(".ghscaff").join("vault.enc");
-        let backup = home.join(".ghscaff").join("vault.enc.bak_pub_sec");
-
-        let had = vault_file.exists();
-        if had {
-            std::fs::copy(&vault_file, &backup).unwrap();
-        }
+        let _home = HomeGuard::new();
 
         save_secret("GHSCAFF_PUB_SEC", "pub_val", "").unwrap();
         let loaded = load("").unwrap().unwrap();
         assert_eq!(loaded.secrets.get("GHSCAFF_PUB_SEC").unwrap(), "pub_val");
-
-        if had {
-            let _ = std::fs::copy(&backup, &vault_file);
-            let _ = std::fs::remove_file(&backup);
-        } else {
-            let _ = std::fs::remove_file(&vault_file);
-        }
     }
 
     #[test]
     fn test_save_secret_overwrite_public_api() {
         let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let home = dirs::home_dir().unwrap();
-        let vault_file = home.join(".ghscaff").join("vault.enc");
-        let backup = home.join(".ghscaff").join("vault.enc.bak_ow2");
-
-        let had = vault_file.exists();
-        if had {
-            std::fs::copy(&vault_file, &backup).unwrap();
-        }
+        let _home = HomeGuard::new();
 
         save_secret("GHSCAFF_OW2", "first", "").unwrap();
         save_secret("GHSCAFF_OW2", "second", "").unwrap();
         let loaded = load("").unwrap().unwrap();
         assert_eq!(loaded.secrets.get("GHSCAFF_OW2").unwrap(), "second");
-
-        if had {
-            let _ = std::fs::copy(&backup, &vault_file);
-            let _ = std::fs::remove_file(&backup);
-        } else {
-            let _ = std::fs::remove_file(&vault_file);
-        }
     }
 }

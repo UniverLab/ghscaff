@@ -3,8 +3,12 @@ use clap::{Parser, Subcommand};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod apply;
+mod checks;
+mod doctor;
 mod github;
+mod sponsor_cmd;
 mod templates;
+mod updater;
 mod vault;
 mod wizard;
 
@@ -27,6 +31,10 @@ pub fn is_debug() -> bool {
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+
+    /// Enable the GitHub Sponsor button on an existing repository (owner/repo), then exit
+    #[arg(long, value_name = "OWNER/REPO")]
+    sponsor: Option<String>,
 
     /// Preview changes without making any API call
     #[arg(long, global = true)]
@@ -53,16 +61,27 @@ enum Command {
     },
     /// Reconfigure ghscaff credentials (wipes vault and starts fresh)
     Config,
+    /// Check whether a repo's required status checks can ever be satisfied
+    Doctor {
+        /// owner/repo (auto-detected from git remote if omitted)
+        repo: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     set_debug(cli.debug);
+
+    if let Some(target) = &cli.sponsor {
+        return sponsor_cmd::run_sponsor(target);
+    }
+
     check_for_update();
     match cli.command {
         None | Some(Command::New { .. }) => wizard::run(cli.dry_run),
         Some(Command::Apply { repo, dry_run }) => apply::run_apply(repo.as_deref(), dry_run),
         Some(Command::Config) => run_config(),
+        Some(Command::Doctor { repo }) => doctor::run_doctor(repo.as_deref()),
     }
 }
 
@@ -145,7 +164,7 @@ fn check_for_update() {
         println!();
         return;
     }
-    run_installer();
+    run_installer(latest_tag);
 }
 
 fn is_newer(current: &str, latest: &str) -> bool {
@@ -161,9 +180,10 @@ fn is_newer(current: &str, latest: &str) -> bool {
     parse(latest) > parse(current)
 }
 
-fn run_installer() {
+fn run_installer(latest_tag: &str) {
     #[cfg(target_os = "windows")]
     {
+        let _ = latest_tag;
         let _ = std::process::Command::new("powershell")
             .args([
                 "-Command",
@@ -173,25 +193,31 @@ fn run_installer() {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        match std::process::Command::new("sh")
-            .args([
-                "-c",
-                "curl -fsSL https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.sh | sh",
-            ])
-            .status()
-        {
-            Ok(_) => {
-                println!("  \x1b[32m✓\x1b[0m Updated! Restart your terminal to use the new version.");
-                std::process::exit(0);
-            }
-            Err(e) => eprintln!("  ⚠ Installer failed: {e}"),
-        }
+        updater::run_installer(latest_tag);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cli_parses_sponsor_flag() {
+        let cli = Cli::try_parse_from(["ghscaff", "--sponsor", "UniverLab/ghscaff"]).unwrap();
+        assert_eq!(cli.sponsor.as_deref(), Some("UniverLab/ghscaff"));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_sponsor_flag_absent_by_default() {
+        let cli = Cli::try_parse_from(["ghscaff"]).unwrap();
+        assert!(cli.sponsor.is_none());
+    }
+
+    #[test]
+    fn test_cli_sponsor_flag_requires_value() {
+        assert!(Cli::try_parse_from(["ghscaff", "--sponsor"]).is_err());
+    }
 
     #[test]
     fn test_is_newer_major_version() {

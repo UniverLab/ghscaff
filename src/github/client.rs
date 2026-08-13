@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 pub struct GithubClient {
     client: Client,
     token: String,
+    base_url: String,
 }
 
 fn check_status(resp: Response) -> Result<Response> {
@@ -27,11 +28,21 @@ impl GithubClient {
         Self {
             client: Client::new(),
             token: token.to_owned(),
+            base_url: "https://api.github.com".to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_with_base_url(token: &str, base_url: &str) -> Self {
+        Self {
+            client: Client::new(),
+            token: token.to_owned(),
+            base_url: base_url.to_string(),
         }
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::blocking::RequestBuilder {
-        let url = format!("https://api.github.com{path}");
+        let url = format!("{}{path}", self.base_url);
         self.client
             .request(method, &url)
             .header("Authorization", format!("token {}", self.token))

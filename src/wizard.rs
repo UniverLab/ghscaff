@@ -4,7 +4,7 @@ use inquire::{Confirm, MultiSelect, Password, Select, Text};
 use crate::github::{
     branches,
     client::{resolve_token, GithubClient},
-    contents, labels, repo, secrets, teams,
+    contents, labels, repo, secrets, sponsors, teams,
 };
 use crate::templates;
 
@@ -301,10 +301,14 @@ fn execute(
             });
         }
 
-        let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())?;
+        let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())
+            .unwrap_or_else(|_| {
+                eprintln!("  ⚠  Could not fetch .gitignore template from GitHub");
+                String::new()
+            });
         init_files.push(contents::TreeFile {
             path: ".gitignore".into(),
-            content: gitignore,
+            content: templates::assemble_gitignore(&gitignore),
         });
     }
 
@@ -352,21 +356,33 @@ fn execute(
         });
     }
 
-    // 5. Branch protection
-    let ci_check = c
-        .language
-        .as_deref()
-        .map(|_| "rust-ci / Format, Lint & Test");
+    // 5. Branch protection — required contexts are derived from the workflow
+    // files just committed, never hardcoded, so a renamed job can't leave a
+    // required check pointing at a name nothing will ever report.
+    let workflow_sources: Vec<crate::checks::WorkflowSource> = init_files
+        .iter()
+        .map(|f| crate::checks::WorkflowSource {
+            path: &f.path,
+            content: &f.content,
+        })
+        .collect();
+    let required_contexts = crate::checks::derive_required_contexts(&workflow_sources);
     step!(
         &format!("apply branch protection ({})", c.default_branch),
         {
-            branches::apply_branch_protection(client, owner, name, &c.default_branch, ci_check)?;
+            branches::apply_branch_protection(
+                client,
+                owner,
+                name,
+                &c.default_branch,
+                &required_contexts,
+            )?;
             Ok::<(), anyhow::Error>(())
         }
     );
     if c.create_develop {
         step!("apply branch protection (develop)", {
-            branches::apply_branch_protection(client, owner, name, "develop", ci_check)?;
+            branches::apply_branch_protection(client, owner, name, "develop", &required_contexts)?;
             Ok::<(), anyhow::Error>(())
         });
     }
@@ -443,10 +459,59 @@ fn execute(
     if !dry_run {
         if let Some(_r) = &created_repo {
             offer_gitkit_clone(owner, name);
+            offer_sponsor_button(client, owner, name);
         }
     }
 
     Ok(())
+}
+
+/// Which way the user answered the Sponsor-button prompt, or that there was
+/// no way to ask (non-interactive run — no TTY, or an explicit cancel).
+enum SponsorAnswer {
+    Yes,
+    No,
+    Skipped,
+}
+
+fn ask_sponsor_button() -> SponsorAnswer {
+    match Confirm::new("Enable the Sponsor button for this repository?")
+        .with_default(false)
+        .prompt()
+    {
+        Ok(true) => SponsorAnswer::Yes,
+        Ok(false) => SponsorAnswer::No,
+        Err(_) => SponsorAnswer::Skipped,
+    }
+}
+
+/// Asks whether to enable the GitHub Sponsor button and, only on an explicit
+/// "yes", calls GS1's `enable_sponsorships`. A non-interactive run (no TTY)
+/// or a "no" answer leaves the repository untouched — the repo is already
+/// created and configured, so this step never fails the scaffold.
+fn offer_sponsor_button(client: &GithubClient, owner: &str, name: &str) {
+    apply_sponsor_answer(ask_sponsor_button(), || {
+        sponsors::enable_sponsorships(client, owner, name)
+    });
+}
+
+fn apply_sponsor_answer(
+    answer: SponsorAnswer,
+    enable: impl FnOnce() -> Result<sponsors::SponsorshipStatus>,
+) {
+    if !matches!(answer, SponsorAnswer::Yes) {
+        return;
+    }
+    print!("  Enabling Sponsor button... ");
+    println!("{}", sponsor_outcome_message(&enable()));
+}
+
+fn sponsor_outcome_message(result: &Result<sponsors::SponsorshipStatus>) -> String {
+    match result {
+        Ok(sponsors::SponsorshipStatus::Enabled) => "ok".to_string(),
+        Ok(sponsors::SponsorshipStatus::AlreadyEnabled) => "ok  (already enabled)".to_string(),
+        Err(e) => format!("failed: {e}"),
+    }
 }
 
 fn offer_gitkit_clone(owner: &str, repo: &str) {
@@ -1141,5 +1206,53 @@ mod tests {
     fn test_banner_is_const_str() {
         assert!(!BANNER.is_empty());
         assert!(BANNER.contains("██"));
+    }
+
+    #[test]
+    fn test_apply_sponsor_answer_yes_calls_enable() {
+        let called = std::cell::Cell::new(false);
+        apply_sponsor_answer(SponsorAnswer::Yes, || {
+            called.set(true);
+            Ok(sponsors::SponsorshipStatus::Enabled)
+        });
+        assert!(called.get(), "answering yes must invoke GS1's function");
+    }
+
+    #[test]
+    fn test_apply_sponsor_answer_no_skips_enable() {
+        apply_sponsor_answer(
+            SponsorAnswer::No,
+            || -> Result<sponsors::SponsorshipStatus> {
+                panic!("answering no must never call GS1's function")
+            },
+        );
+    }
+
+    #[test]
+    fn test_apply_sponsor_answer_skipped_skips_enable() {
+        apply_sponsor_answer(
+            SponsorAnswer::Skipped,
+            || -> Result<sponsors::SponsorshipStatus> {
+                panic!("a non-interactive run must never call GS1's function")
+            },
+        );
+    }
+
+    #[test]
+    fn test_sponsor_outcome_message_enabled() {
+        let result = Ok(sponsors::SponsorshipStatus::Enabled);
+        assert_eq!(sponsor_outcome_message(&result), "ok");
+    }
+
+    #[test]
+    fn test_sponsor_outcome_message_already_enabled() {
+        let result = Ok(sponsors::SponsorshipStatus::AlreadyEnabled);
+        assert_eq!(sponsor_outcome_message(&result), "ok  (already enabled)");
+    }
+
+    #[test]
+    fn test_sponsor_outcome_message_error() {
+        let result: Result<sponsors::SponsorshipStatus> = Err(anyhow::anyhow!("boom"));
+        assert_eq!(sponsor_outcome_message(&result), "failed: boom");
     }
 }

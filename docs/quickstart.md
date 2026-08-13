@@ -19,6 +19,26 @@ On first run ghscaff asks for a GitHub token and stores it in the
 [7 steps](wizard.md) — basics, visibility, teams, template, branches,
 features, review — and creates the fully configured repository.
 
+## Enable Sponsor button on existing repo
+
+```bash
+ghscaff --sponsor owner/repo
+```
+
+Enables the GitHub Sponsor button on a repository without running the full wizard.
+
+## Validate status checks
+
+```bash
+ghscaff doctor owner/repo
+
+# Auto-detects owner/repo from the git remote if omitted
+cd my-existing-project
+ghscaff doctor
+```
+
+Verifies that required status checks can be satisfied by the CI workflow.
+
 ## Configure an existing repository
 
 ```bash
