@@ -300,4 +300,52 @@ mod tests {
         let team: Team = serde_json::from_str(json).unwrap();
         assert_eq!(team.name, "開発チーム");
     }
+
+    // ── Mock-based integration tests ──────────────────────────────
+
+    use super::super::test_utils::{mock_client, start_mock_server};
+
+    #[test]
+    fn list_teams_returns_teams() {
+        let url = start_mock_server(|path| {
+            if path == "/user/teams" {
+                (200, r#"[{"name":"Backend","slug":"backend","description":"Backend team"},{"name":"DevOps","slug":"devops","description":null}]"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let teams = list_teams(&client).unwrap();
+        assert_eq!(teams.len(), 2);
+        assert_eq!(teams[0].slug, "backend");
+        assert_eq!(teams[1].slug, "devops");
+    }
+
+    #[test]
+    fn add_team_to_repo_succeeds() {
+        let url = start_mock_server(|path| {
+            if path.contains("/teams/") && path.contains("/repos/") {
+                (204, String::new())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = add_team_to_repo(&client, "org", "repo", "backend", "push");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn list_teams_returns_empty_when_no_teams() {
+        let url = start_mock_server(|path| {
+            if path == "/user/teams" {
+                (200, r#"[]"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let teams = list_teams(&client).unwrap();
+        assert!(teams.is_empty());
+    }
 }

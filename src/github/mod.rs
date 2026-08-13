@@ -6,3 +6,6 @@ pub mod repo;
 pub mod secrets;
 pub mod sponsors;
 pub mod teams;
+
+#[cfg(test)]
+pub mod test_utils;

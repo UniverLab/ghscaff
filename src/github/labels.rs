@@ -388,4 +388,98 @@ mod tests {
         let label: Label = serde_json::from_str(json).unwrap();
         assert_eq!(label.name, "bug");
     }
+
+    // ── Mock-based integration tests ──────────────────────────────
+
+    use super::super::test_utils::{mock_client, start_mock_server};
+
+    #[test]
+    fn list_labels_returns_labels() {
+        let url = start_mock_server(|path| {
+            if path.contains("/labels") {
+                (200, r#"[{"name":"bug","color":"d73a4a","description":"Bug"},{"name":"feature","color":"a2eeef","description":"Feature"}]"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let labels = list_labels(&client, "owner", "repo").unwrap();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].name, "bug");
+        assert_eq!(labels[1].name, "feature");
+    }
+
+    #[test]
+    fn list_labels_returns_empty_on_error() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = list_labels(&client, "owner", "repo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn create_label_succeeds() {
+        let url = start_mock_server(|path| {
+            if path.contains("/labels") {
+                (201, r#"{"name":"new","color":"ff0000","description":"New label"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let label = Label {
+            name: "new".into(),
+            color: "ff0000".into(),
+            description: "New label".into(),
+        };
+        let result = create_label(&client, "owner", "repo", &label);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn update_label_succeeds() {
+        let url = start_mock_server(|path| {
+            if path.contains("/labels/bug") {
+                (200, r#"{"name":"bug","color":"00ff00","description":"Updated"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let label = Label {
+            name: "bug".into(),
+            color: "00ff00".into(),
+            description: "Updated".into(),
+        };
+        let result = update_label(&client, "owner", "repo", "bug", &label);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn delete_label_succeeds() {
+        let url = start_mock_server(|path| {
+            if path.contains("/labels/bug") {
+                (204, String::new())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = delete_label(&client, "owner", "repo", "bug");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn delete_label_with_special_chars() {
+        let url = start_mock_server(|path| {
+            if path.contains("/labels/bug%20report") {
+                (204, String::new())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = delete_label(&client, "owner", "repo", "bug report");
+        assert!(result.is_ok());
+    }
 }

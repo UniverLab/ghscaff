@@ -1254,4 +1254,238 @@ mod tests {
         assert!(dbg.contains("3"));
         assert!(dbg.contains("4"));
     }
+
+    // ── Mock-based integration tests ──────────────────────────────
+
+    use super::super::github::test_utils::{mock_client, start_mock_server};
+
+    #[test]
+    fn check_branch_exists_returns_true_when_found() {
+        let url = start_mock_server(|path| {
+            if path.contains("/git/ref/heads/") {
+                (200, r#"{"ref":"refs/heads/main","sha":"abc"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = check_branch_exists(&client, "owner", "repo", "main").unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn check_branch_exists_returns_false_when_missing() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = check_branch_exists(&client, "owner", "repo", "nonexistent").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn check_branch_protection_returns_true_when_enabled() {
+        let url = start_mock_server(|path| {
+            if path.contains("/branches/") && path.contains("/protection") {
+                (200, r#"{"required_status_checks":{"contexts":[]}}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = check_branch_protection(&client, "owner", "repo", "main").unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn check_branch_protection_returns_false_when_not_configured() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = check_branch_protection(&client, "owner", "repo", "main").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn check_file_exists_returns_true_when_found() {
+        let url = start_mock_server(|path| {
+            if path.contains("/contents/") {
+                (200, r#"{"name":"ci.yml","path":".github/workflows/ci.yml"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = check_file_exists(&client, "owner", "repo", ".github/workflows/ci.yml").unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn check_file_exists_returns_false_when_missing() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = check_file_exists(&client, "owner", "repo", "missing.txt").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn get_repo_state_assembles_apply_context() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let cargo_encoded = STANDARD.encode(b"[package]\nname = \"test\"");
+        let ci_encoded = STANDARD.encode(b"name: CI");
+
+        let url = start_mock_server(move |path| {
+            if path.contains("/labels?per_page=100") {
+                (200, r#"[{"name":"bug","color":"d73a4a","description":"Bug"}]"#.to_string())
+            } else if path.contains("/git/ref/heads/develop") {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            } else if path.contains("/branches/main/protection") {
+                (200, r#"{"required_status_checks":{"contexts":["ci / Test"]}}"#.to_string())
+            } else if path.contains("/contents/.github") {
+                (200, format!(r#"{{"content":"{}","encoding":"base64"}}"#, ci_encoded))
+            } else if path.contains("/contents/Cargo.toml") {
+                (200, format!(r#"{{"content":"{}","encoding":"base64"}}"#, cargo_encoded))
+            } else if path == "/repos/owner/repo" {
+                (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":["rust"]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let ctx = get_repo_state(&client, "owner", "repo").unwrap();
+        assert_eq!(ctx.owner, "owner");
+        assert_eq!(ctx.repo, "repo");
+        assert!(!ctx.has_develop);
+        assert!(ctx.branch_protection_enabled);
+        assert_eq!(ctx.current_topics, vec!["rust".to_string()]);
+    }
+
+    #[test]
+    fn sync_labels_creates_missing_updates_differing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let create_count = Arc::new(AtomicUsize::new(0));
+        let cc = create_count.clone();
+        let update_count = Arc::new(AtomicUsize::new(0));
+        let uc = update_count.clone();
+
+        let url = start_mock_server(move |path| {
+            if path.contains("/labels?per_page=100") {
+                // Return one existing label with different color
+                (200, r#"[{"name":"bug","color":"ff0000","description":"Old desc"}]"#.to_string())
+            } else if path.contains("/labels") && !path.contains("per_page") {
+                // POST (create) or PATCH (update) or DELETE
+                if path.ends_with("/labels") {
+                    // POST - create
+                    cc.fetch_add(1, Ordering::SeqCst);
+                    (201, r#"{"name":"feature","color":"a2eeef","description":"New feature"}"#.to_string())
+                } else {
+                    // PATCH - update (path has /labels/name)
+                    uc.fetch_add(1, Ordering::SeqCst);
+                    (200, r#"{"name":"bug","color":"d73a4a","description":"Something isn't working"}"#.to_string())
+                }
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = sync_labels(&client, "owner", "repo", false).unwrap();
+        assert!(result.created > 0);
+        assert!(result.up_to_date > 0 || result.updated > 0);
+    }
+
+    #[test]
+    fn sync_labels_dry_run_does_not_modify() {
+        let url = start_mock_server(move |path| {
+            if path.contains("/labels?per_page=100") {
+                (200, r#"[{"name":"bug","color":"ff0000","description":"Old"}]"#.to_string())
+            } else {
+                // Any create/update/delete call means dry_run failed
+                panic!("dry_run should not make write API calls, but got: {path}");
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = sync_labels(&client, "owner", "repo", true).unwrap();
+        // dry_run counts are calculated but no API calls are made
+        // "bug" exists but color differs → updated=1; 6 other standard labels missing → created=6
+        assert_eq!(result.updated, 1);
+        assert_eq!(result.created, 6);
+    }
+
+    #[test]
+    fn merge_topics_adds_missing_topics() {
+        let url = start_mock_server(move |path| {
+            if path == "/repos/owner/repo" {
+                (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":["existing"]}"#.to_string())
+            } else if path.contains(":put") || path.contains("topics") {
+                (200, r#"{"names":["existing","new_topic"]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = merge_topics(&client, "owner", "repo", &["new_topic"], false).unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn merge_topics_returns_false_when_nothing_to_add() {
+        let url = start_mock_server(move |path| {
+            if path == "/repos/owner/repo" {
+                (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":["existing"]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = merge_topics(&client, "owner", "repo", &["existing"], false).unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn merge_topics_dry_run_does_not_set() {
+        let url = start_mock_server(move |path| {
+            if path == "/repos/owner/repo" {
+                (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":[]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let result = merge_topics(&client, "owner", "repo", &["new_topic"], true).unwrap();
+        assert!(result); // changed=true but no API call made
+    }
+
+    #[test]
+    fn detect_template_secrets_finds_rust_markers() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let cargo_encoded = STANDARD.encode(b"[package]\nname = \"test\"");
+
+        let url = start_mock_server(move |path| {
+            if path.contains("/contents/Cargo.toml") {
+                (200, format!(r#"{{"content":"{}","encoding":"base64"}}"#, cargo_encoded))
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let secrets = detect_template_secrets(&client, "owner", "repo");
+        // Should find secrets from the "rust" template
+        assert!(!secrets.is_empty());
+    }
+
+    #[test]
+    fn detect_template_secrets_returns_empty_when_no_markers() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let secrets = detect_template_secrets(&client, "owner", "repo");
+        assert!(secrets.is_empty());
+    }
 }

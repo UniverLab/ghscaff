@@ -440,4 +440,123 @@ mod tests {
         let repo: Repo = serde_json::from_str(&json).unwrap();
         assert_eq!(repo.topics.unwrap().len(), 50);
     }
+
+    // ── Mock-based integration tests ──────────────────────────────
+
+    use super::super::test_utils::{mock_client, start_mock_server};
+
+    #[test]
+    fn get_user_returns_user() {
+        let url = start_mock_server(|path| {
+            if path == "/user" {
+                (200, r#"{"login":"octocat"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let user = get_user(&client).unwrap();
+        assert_eq!(user.login, "octocat");
+    }
+
+    #[test]
+    fn list_orgs_returns_orgs() {
+        let url = start_mock_server(|path| {
+            if path == "/user/orgs" {
+                (200, r#"[{"login":"org1"},{"login":"org2"}]"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let orgs = list_orgs(&client).unwrap();
+        assert_eq!(orgs.len(), 2);
+        assert_eq!(orgs[0].login, "org1");
+        assert_eq!(orgs[1].login, "org2");
+    }
+
+    #[test]
+    fn get_repo_returns_repo() {
+        let url = start_mock_server(|path| {
+            if path == "/repos/owner/repo" {
+                (200, r#"{"full_name":"owner/repo","html_url":"https://github.com/owner/repo","default_branch":"main","topics":["rust"]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let repo = get_repo(&client, "owner", "repo").unwrap();
+        assert_eq!(repo.full_name, "owner/repo");
+        assert_eq!(repo.default_branch, "main");
+    }
+
+    #[test]
+    fn create_user_repo_succeeds() {
+        let url = start_mock_server(|path| {
+            if path == "/user/repos" {
+                (201, r#"{"full_name":"user/repo","html_url":"https://github.com/user/repo","default_branch":"main","topics":[]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let repo = create_repo(&client, "user", "repo", "Test", false, false).unwrap();
+        assert_eq!(repo.full_name, "user/repo");
+    }
+
+    #[test]
+    fn create_org_repo_succeeds() {
+        let url = start_mock_server(|path| {
+            if path == "/orgs/myorg/repos" {
+                (201, r#"{"full_name":"myorg/repo","html_url":"https://github.com/myorg/repo","default_branch":"main","topics":[]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let repo = create_repo(&client, "myorg", "repo", "Org repo", true, true).unwrap();
+        assert_eq!(repo.full_name, "myorg/repo");
+    }
+
+    #[test]
+    fn set_topics_succeeds() {
+        let url = start_mock_server(|path| {
+            if path.contains("/topics") {
+                (200, r#"{"names":["rust","cli"]}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = set_topics(&client, "owner", "repo", &["rust".to_string(), "cli".to_string()]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn get_gitignore_template_succeeds() {
+        let url = start_mock_server(|path| {
+            if path.contains("/gitignore/templates/") {
+                (200, r#"{"source":"Dependency directories\nnode_modules/"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let template = get_gitignore_template(&client, "Node").unwrap();
+        assert!(template.contains("node_modules/"));
+    }
+
+    #[test]
+    fn get_license_template_succeeds() {
+        let url = start_mock_server(|path| {
+            if path.contains("/licenses/") {
+                (200, r#"{"body":"MIT License\nCopyright (c) [year] [fullname]"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let license = get_license_template(&client, "mit").unwrap();
+        assert!(license.contains("[year]"));
+    }
 }

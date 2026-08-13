@@ -429,4 +429,136 @@ mod tests {
         let body = r#"{"data": null, "errors": [{"message": "not found"}]}"#;
         assert!(parse_pr_checks(body).is_none());
     }
+
+    // ── Mock-based integration tests ──────────────────────────────
+
+    use super::super::github::test_utils::{mock_client, start_mock_server};
+
+    #[test]
+    fn get_required_contexts_returns_contexts_when_protected() {
+        let url = start_mock_server(|path| {
+            if path.contains("/branches/") && path.contains("/protection") {
+                (200, r#"{"required_status_checks":{"strict":true,"contexts":["ci / Test","ci / Lint"]}}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_required_contexts(&client, "owner", "repo", "main").unwrap();
+        assert_eq!(result, vec!["ci / Test".to_string(), "ci / Lint".to_string()]);
+    }
+
+    #[test]
+    fn get_required_contexts_returns_empty_when_no_protection() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = get_required_contexts(&client, "owner", "repo", "main").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn get_required_contexts_returns_empty_when_no_required_checks() {
+        let url = start_mock_server(|path| {
+            if path.contains("/branches/") && path.contains("/protection") {
+                (200, r#"{"enforce_admins":{"enabled":true}}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_required_contexts(&client, "owner", "repo", "main").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn get_required_contexts_returns_error_on_server_error() {
+        let url = start_mock_server(|path| {
+            if path.contains("/branches/") && path.contains("/protection") {
+                (500, r#"{"message":"Internal Server Error"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_required_contexts(&client, "owner", "repo", "main");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_latest_pr_checks_returns_checks_from_graphql() {
+        let graphql_response = r#"{
+            "data": {
+                "repository": {
+                    "pullRequests": {
+                        "nodes": [{
+                            "number": 5,
+                            "commits": {
+                                "nodes": [{
+                                    "commit": {
+                                        "statusCheckRollup": {
+                                            "contexts": {
+                                                "nodes": [
+                                                    {"__typename":"CheckRun","name":"ci / Test"},
+                                                    {"__typename":"StatusContext","context":"legacy/check"}
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }]
+                            }
+                        }]
+                    }
+                }
+            }
+        }"#;
+        let url = start_mock_server(move |path| {
+            if path == "/graphql" {
+                (200, graphql_response.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_latest_pr_checks(&client, "owner", "repo").unwrap();
+        assert!(result.is_some());
+        let (number, checks) = result.unwrap();
+        assert_eq!(number, 5);
+        assert_eq!(checks, vec!["ci / Test".to_string(), "legacy/check".to_string()]);
+    }
+
+    #[test]
+    fn get_latest_pr_checks_returns_none_when_no_prs() {
+        let graphql_response = r#"{
+            "data": {
+                "repository": {
+                    "pullRequests": { "nodes": [] }
+                }
+            }
+        }"#;
+        let url = start_mock_server(move |path| {
+            if path == "/graphql" {
+                (200, graphql_response.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_latest_pr_checks(&client, "owner", "repo").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_latest_pr_checks_returns_none_when_null_data() {
+        let graphql_response = r#"{"data": null, "errors": [{"message": "not found"}]}"#;
+        let url = start_mock_server(move |path| {
+            if path == "/graphql" {
+                (200, graphql_response.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_latest_pr_checks(&client, "owner", "repo").unwrap();
+        assert!(result.is_none());
+    }
 }

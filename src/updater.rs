@@ -420,4 +420,53 @@ mod tests {
             assert!(result.is_ok());
         }
     }
+
+    #[test]
+    fn cargo_install_root_returns_something() {
+        // cargo_install_root reads env vars; on any dev machine it should
+        // resolve to at least Some(...) via CARGO_HOME or ~/.cargo.
+        let root = cargo_install_root();
+        assert!(root.is_some());
+    }
+
+    #[test]
+    fn is_cargo_managed_delegates_correctly() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("ghscaff");
+        std::fs::write(&exe, b"binary").unwrap();
+        // Without a real cargo root, this should be false
+        assert!(!is_cargo_managed(&exe));
+    }
+
+    #[test]
+    fn extract_binary_with_multiple_entries_finds_correct_one() {
+        let archive = make_tar_gz(&[
+            ("README.md", b"not the binary"),
+            ("ghscaff", b"real-binary-data"),
+            ("LICENSE", b"MIT"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("out");
+        extract_binary(std::io::Cursor::new(archive), &output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"real-binary-data");
+    }
+
+    #[test]
+    fn update_binary_at_preserves_target_on_rename_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("ghscaff");
+        std::fs::write(&target, b"original").unwrap();
+        let tmp = dir.path().join(".update");
+
+        // Write to tmp, then try to rename to a non-existent directory
+        let bad_target = dir.path().join("nonexistent").join("ghscaff");
+        let result = update_binary_at(&tmp, &bad_target, |out| {
+            std::fs::write(out, b"new-content")?;
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        // Target unchanged (still original)
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+    }
 }

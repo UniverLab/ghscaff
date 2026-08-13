@@ -757,4 +757,196 @@ mod tests {
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains(".github/workflows/ci.yml"));
     }
+
+    // ── Mock-based integration tests ──────────────────────────────
+
+    use super::super::test_utils::{mock_client, start_mock_server};
+
+    #[test]
+    fn get_file_content_returns_decoded_content() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let content = "fn main() {}";
+        let encoded = STANDARD.encode(content.as_bytes());
+        let response = format!(r#"{{"content":"{}","encoding":"base64"}}"#, encoded);
+        let url = start_mock_server(move |path| {
+            if path.contains("/contents/") {
+                (200, response.clone())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_file_content(&client, "owner", "repo", "src/main.rs");
+        assert_eq!(result.as_deref(), Some("fn main() {}"));
+    }
+
+    #[test]
+    fn get_file_content_returns_none_for_non_base64() {
+        let response = r#"{"content":"data","encoding":"ascii"}"#;
+        let url = start_mock_server(move |path| {
+            if path.contains("/contents/") {
+                (200, response.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_file_content(&client, "owner", "repo", "file.txt");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_file_content_returns_none_on_api_error() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = get_file_content(&client, "owner", "repo", "missing.txt");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_file_content_returns_none_for_invalid_base64() {
+        let response = r#"{"content":"!!!invalid-base64!!!","encoding":"base64"}"#;
+        let url = start_mock_server(move |path| {
+            if path.contains("/contents/") {
+                (200, response.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_file_content(&client, "owner", "repo", "file.txt");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn fetch_workflow_sources_returns_single_file() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let yaml = "name: CI\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest";
+        let encoded = STANDARD.encode(yaml.as_bytes());
+        let response = format!(r#"{{"content":"{}","encoding":"base64"}}"#, encoded);
+        let url = start_mock_server(move |path| {
+            if path.contains("/contents/") {
+                (200, response.clone())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = fetch_workflow_sources(&client, "owner", "repo", &[".github/workflows/ci.yml"]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, ".github/workflows/ci.yml");
+        assert!(result[0].1.contains("name: CI"));
+    }
+
+    #[test]
+    fn fetch_workflow_sources_returns_empty_for_missing_files() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = fetch_workflow_sources(&client, "owner", "repo", &[".github/workflows/ci.yml"]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn get_branch_sha_opt_returns_sha_when_exists() {
+        let response = r#"{"object":{"sha":"abc123def456"}}"#;
+        let url = start_mock_server(move |path| {
+            if path.contains("/git/refs/heads/") {
+                (200, response.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+        let client = mock_client(&url);
+        let result = get_branch_sha_opt(&client, "owner", "repo", "main");
+        assert_eq!(result.as_deref(), Some("abc123def456"));
+    }
+
+    #[test]
+    fn get_branch_sha_opt_returns_none_when_missing() {
+        let url = start_mock_server(|_| (404, r#"{"message":"Not Found"}"#.to_string()));
+        let client = mock_client(&url);
+        let result = get_branch_sha_opt(&client, "owner", "repo", "nonexistent");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn create_tree_commit_on_empty_repo_creates_ref() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let cc = call_count.clone();
+
+        let url = start_mock_server(move |path| {
+            let count = cc.fetch_add(1, Ordering::SeqCst);
+            if path.contains("/git/refs/heads/") && !path.contains("refs/heads/main") {
+                // Branch doesn't exist yet (empty repo)
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            } else if path.contains("/git/commits/") && count < 3 {
+                // Ready check: commit not yet fetchable
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            } else if path.contains("/git/blobs") {
+                (201, r#"{"sha":"blob_sha_abc"}"#.to_string())
+            } else if path.contains("/git/trees") {
+                (201, r#"{"sha":"tree_sha_xyz"}"#.to_string())
+            } else if path.contains("/git/commits") {
+                (201, r#"{"sha":"commit_sha_123","tree":{"sha":"tree_sha_xyz"}}"#.to_string())
+            } else if path.contains("/git/refs") {
+                (201, r#"{"ref":"refs/heads/main","url":"..."}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let files = vec![TreeFile {
+            path: "README.md".to_string(),
+            content: "# Hello".to_string(),
+        }];
+        let result = create_tree_commit(&client, "owner", "repo", &files, "init", "main");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "commit_sha_123");
+    }
+
+    #[test]
+    fn create_tree_commit_on_existing_branch_updates_ref() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let cc = call_count.clone();
+
+        let url = start_mock_server(move |path| {
+            let count = cc.fetch_add(1, Ordering::SeqCst);
+            if path.contains("/git/refs/heads/main") {
+                // Branch exists
+                (200, r#"{"object":{"sha":"existing_sha"}}"#.to_string())
+            } else if path.contains("/git/commits/existing_sha") && count < 3 {
+                // Ready check: commit not yet fetchable
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            } else if path.contains("/git/commits/existing_sha") {
+                // Parent commit
+                (200, r#"{"sha":"existing_sha","tree":{"sha":"base_tree_sha"}}"#.to_string())
+            } else if path.contains("/git/blobs") {
+                (201, r#"{"sha":"blob_sha_abc"}"#.to_string())
+            } else if path.contains("/git/trees") {
+                (201, r#"{"sha":"tree_sha_new"}"#.to_string())
+            } else if path.contains("/git/commits") && !path.contains("existing_sha") {
+                (201, r#"{"sha":"new_commit_sha","tree":{"sha":"tree_sha_new"}}"#.to_string())
+            } else if path.contains("/git/refs/heads/main") {
+                (200, r#"{"sha":"new_commit_sha"}"#.to_string())
+            } else {
+                (404, r#"{"message":"Not Found"}"#.to_string())
+            }
+        });
+
+        let client = mock_client(&url);
+        let files = vec![TreeFile {
+            path: "file.txt".to_string(),
+            content: "content".to_string(),
+        }];
+        let result = create_tree_commit(&client, "owner", "repo", &files, "update", "main");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "new_commit_sha");
+    }
 }
