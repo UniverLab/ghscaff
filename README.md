@@ -43,7 +43,7 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 - **🚀 Language templates** — Rust (v1), Python/Node.js/Java coming soon
 - **📝 Boilerplate files** — README, Cargo.toml, CI/CD workflows, LICENSE
 - **🔑 Template secrets** — Automatically configures required GitHub Actions secrets per template
-- **⬆️ Self-update** — Replaces the running binary on startup; skips binaries installed with `cargo install` (use `cargo install --force` instead)
+- **⬆️ Explicit updates** — `ghscaff update` replaces the running binary, but only after asking (default: no). Binaries installed with `cargo install` are never touched — use `cargo install --force ghscaff` instead.
 
 ---
 
@@ -98,11 +98,29 @@ Check the [Releases](https://github.com/UniverLab/ghscaff/releases) page for pre
 
 ### Updates
 
-Ghscaff checks for new releases when it starts. If a newer version is available, it prompts you to update. Choose "yes" to replace the running binary with the latest version.
+Updating is always explicit — ghscaff never installs anything on its own:
 
-If you installed ghscaff with `cargo install`, the auto-updater will refuse to touch the binary and instead direct you to run `cargo install --force ghscaff`.
+```bash
+ghscaff update            # asks "Update to v0.7.0? [y/N]" — default is NO
+ghscaff update --yes      # skip the prompt
+ghscaff update --check    # report only: exit 1 = update available, 0 = current
+```
 
-You can disable update checks with:
+On "yes", ghscaff downloads the release asset for your platform, verifies it
+against the release's `SHA256SUMS.txt` (verification is skipped only when the
+release ships no checksum file) and atomically replaces the running binary.
+Your `~/.ghscaff` state — encrypted vault and boilerplate cache — is never
+touched: it is not the binary.
+
+If you installed ghscaff with `cargo install`, `ghscaff update` refuses to
+touch the binary and instead tells you to run:
+```bash
+cargo install --force ghscaff
+```
+
+On startup ghscaff only *notices* new releases and prints a one-line hint to
+run `ghscaff update` — it never prompts and never installs. To silence the
+notice:
 ```bash
 GHSCAFF_NO_UPDATE_CHECK=1 ghscaff
 ```

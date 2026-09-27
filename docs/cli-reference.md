@@ -21,13 +21,14 @@ Running `ghscaff` with no command starts the creation wizard (same as
 | `ghscaff apply [owner/repo]` | Configure an existing repository (auto-detected from git remote if omitted) |
 | `ghscaff doctor [owner/repo]` | Verify that required status checks can be satisfied (auto-detected from git remote if omitted) |
 | `ghscaff config` | Reconfigure credentials — wipes the vault and starts fresh |
+| `ghscaff update [--check] [--yes]` | Update to the latest stable release; always asks first. `--check` only reports (exit 1 = available, 0 = current) |
 
 ## Global flags
 
 | Flag | Description |
 |---|---|
 | `--sponsor OWNER/REPO` | Enable GitHub Sponsor button on an existing repository |
-| `--dry-run` | Preview changes without making any API calls |
+| `--dry-run` | Preview changes without making any API calls (rejected by `update`, which makes no API calls) |
 | `--help` | Show help for any command |
 | `--version` | Show ghscaff version |
 
@@ -37,6 +38,7 @@ Running `ghscaff` with no command starts the creation wizard (same as
 |---|---|
 | `GITHUB_TOKEN` | Token override — takes precedence over the vault (CI/CD friendly) |
 | `CARGO_REGISTRY_TOKEN` | Resolved as a template secret for the Rust template |
+| `GHSCAFF_NO_UPDATE_CHECK=1` | Silence the startup update notice (does not affect `ghscaff update`) |
 
 ## Files
 

@@ -55,14 +55,27 @@ x86_64 are published on the
 
 ## Self-update
 
-Ghscaff checks for new releases on startup. When a newer version is available, it prompts you to update. Choose "yes" to replace the running binary with the latest version.
+Updating is always explicit — ghscaff never installs anything on its own:
 
-If you installed ghscaff with `cargo install`, the auto-updater will refuse to touch the binary and instead direct you to run:
+```bash
+ghscaff update            # asks "Update to v0.7.0? [y/N]" — default is NO
+ghscaff update --yes      # skip the prompt
+ghscaff update --check    # report only: exit 1 = update available, 0 = current
+```
+
+On "yes", ghscaff downloads the release asset for your platform, verifies it
+against the release's `SHA256SUMS.txt` (skipped only when the release ships
+no checksum file) and atomically replaces the running binary. Your `~/.ghscaff`
+state — encrypted vault and boilerplate cache — is never touched.
+
+If you installed ghscaff with `cargo install`, `ghscaff update` refuses to
+touch the binary and instead direct you to run:
 ```bash
 cargo install --force ghscaff
 ```
 
-You can disable update checks by setting the environment variable:
+At startup ghscaff only prints a one-line notice when a newer release exists.
+Disable that notice with:
 ```bash
 GHSCAFF_NO_UPDATE_CHECK=1 ghscaff
 ```

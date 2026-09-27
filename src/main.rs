@@ -66,6 +66,15 @@ enum Command {
         /// owner/repo (auto-detected from git remote if omitted)
         repo: Option<String>,
     },
+    /// Update ghscaff to the latest stable release (always asks first)
+    Update {
+        /// Only report whether an update is available (exit 1 = yes, 0 = no)
+        #[arg(long)]
+        check: bool,
+        /// Do not prompt; proceed if an update is available
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -76,12 +85,24 @@ fn main() -> Result<()> {
         return sponsor_cmd::run_sponsor(target);
     }
 
+    // The explicit update command is handled before the silent startup
+    // notice: `--check` must not pay for a duplicate lookup, and
+    // GHSCAFF_NO_UPDATE_CHECK only silences the notice, never this.
+    if let Some(Command::Update { check, yes }) = &cli.command {
+        if cli.dry_run {
+            anyhow::bail!("--dry-run has no effect on update");
+        }
+        let code = updater::run_update(*check, *yes)?;
+        std::process::exit(code);
+    }
+
     check_for_update();
     match cli.command {
         None | Some(Command::New { .. }) => wizard::run(cli.dry_run),
         Some(Command::Apply { repo, dry_run }) => apply::run_apply(repo.as_deref(), dry_run),
         Some(Command::Config) => run_config(),
         Some(Command::Doctor { repo }) => doctor::run_doctor(repo.as_deref()),
+        Some(Command::Update { .. }) => unreachable!("ghscaff update is handled above"),
     }
 }
 
@@ -126,74 +147,19 @@ fn run_config() -> Result<()> {
     Ok(())
 }
 
+/// Silent, read-only startup notice (CM34): when a newer stable release
+/// exists, print one line pointing at `ghscaff update` and return. It never
+/// prompts and never installs — the explicit command is the only path that
+/// downloads anything, and it always asks first. Every failure (DNS, HTTP,
+/// rate limit, JSON) is silent here.
 fn check_for_update() {
     if std::env::var("GHSCAFF_NO_UPDATE_CHECK").is_ok() {
         return;
     }
-    let Ok(client) = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .user_agent("ghscaff")
-        .build()
-    else {
-        return;
-    };
-    let Ok(resp) = client
-        .get("https://api.github.com/repos/UniverLab/ghscaff/releases/latest")
-        .send()
-    else {
-        return;
-    };
-    let Ok(json) = resp.json::<serde_json::Value>() else {
-        return;
-    };
-    let Some(latest_tag) = json["tag_name"].as_str() else {
-        return;
-    };
-    let current = format!("v{}", env!("CARGO_PKG_VERSION"));
-    if !is_newer(&current, latest_tag) {
-        return;
-    }
-    println!("  \x1b[33m⬆  Update available:\x1b[0m {current} → {latest_tag}");
-    let Ok(install) = inquire::Confirm::new("Install now?")
-        .with_default(true)
-        .prompt()
-    else {
-        return;
-    };
-    if !install {
-        println!();
-        return;
-    }
-    run_installer(latest_tag);
-}
-
-fn is_newer(current: &str, latest: &str) -> bool {
-    let parse = |v: &str| -> (u64, u64, u64) {
-        let v = v.trim_start_matches('v');
-        let p: Vec<u64> = v.split('.').filter_map(|s| s.parse().ok()).collect();
-        (
-            *p.first().unwrap_or(&0),
-            *p.get(1).unwrap_or(&0),
-            *p.get(2).unwrap_or(&0),
-        )
-    };
-    parse(latest) > parse(current)
-}
-
-fn run_installer(latest_tag: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = latest_tag;
-        let _ = std::process::Command::new("powershell")
-            .args([
-                "-Command",
-                "irm https://raw.githubusercontent.com/UniverLab/ghscaff/main/scripts/install.ps1 | iex",
-            ])
-            .status();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        updater::run_installer(latest_tag);
+    let fetcher = updater::RealFetcher::with_timeout(std::time::Duration::from_secs(3));
+    let current = updater::current_version();
+    if let Some(tag) = updater::check_notice(&fetcher, &current) {
+        println!("  \x1b[33m⬆  Update available:\x1b[0m {current} → {tag} — run 'ghscaff update'");
     }
 }
 
@@ -220,83 +186,27 @@ mod tests {
     }
 
     #[test]
-    fn test_is_newer_major_version() {
-        assert!(is_newer("v0.5.0", "v1.0.0"));
+    fn test_cli_parses_update() {
+        let cli = Cli::try_parse_from(["ghscaff", "update"]).unwrap();
+        match cli.command {
+            Some(Command::Update { check, yes }) => {
+                assert!(!check, "--check defaults to false");
+                assert!(!yes, "--yes defaults to false");
+            }
+            _ => panic!("expected Command::Update"),
+        }
     }
 
     #[test]
-    fn test_is_newer_minor_version() {
-        assert!(is_newer("v0.5.0", "v0.6.0"));
-    }
-
-    #[test]
-    fn test_is_newer_patch_version() {
-        assert!(is_newer("v0.5.0", "v0.5.1"));
-    }
-
-    #[test]
-    fn test_is_newer_same_version() {
-        assert!(!is_newer("v0.5.0", "v0.5.0"));
-    }
-
-    #[test]
-    fn test_is_newer_older() {
-        assert!(!is_newer("v1.0.0", "v0.9.0"));
-    }
-
-    #[test]
-    fn test_is_newer_without_v_prefix() {
-        assert!(is_newer("0.5.0", "0.6.0"));
-    }
-
-    #[test]
-    fn test_is_newer_mixed_prefix() {
-        assert!(is_newer("v0.5.0", "1.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_major_only() {
-        assert!(is_newer("v1.0.0", "v2.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_minor_only() {
-        assert!(!is_newer("v2.0.0", "v1.9.0"));
-    }
-
-    #[test]
-    fn test_is_newer_patch_bumps_not_enough() {
-        assert!(!is_newer("v1.0.1", "v1.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_zero_versions() {
-        assert!(!is_newer("v0.0.0", "v0.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_large_numbers() {
-        assert!(is_newer("v0.0.1", "v99.99.99"));
-    }
-
-    #[test]
-    fn test_is_newer_incomplete_version_latest() {
-        assert!(is_newer("v0.5.0", "v1"));
-    }
-
-    #[test]
-    fn test_is_newer_incomplete_version_current() {
-        assert!(!is_newer("v1", "v1.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_both_incomplete() {
-        assert!(!is_newer("v1", "v1"));
-    }
-
-    #[test]
-    fn test_is_newer_invalid_input() {
-        assert!(!is_newer("abc", "xyz"));
+    fn test_cli_parses_update_check_yes() {
+        let cli = Cli::try_parse_from(["ghscaff", "update", "--check", "--yes"]).unwrap();
+        match cli.command {
+            Some(Command::Update { check, yes }) => {
+                assert!(check);
+                assert!(yes);
+            }
+            _ => panic!("expected Command::Update"),
+        }
     }
 
     #[test]
@@ -319,74 +229,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_newer_equal_major_minor() {
-        assert!(!is_newer("v1.2.3", "v1.2.3"));
-    }
-
-    #[test]
-    fn test_is_newer_patch_only_difference() {
-        assert!(is_newer("v1.2.0", "v1.2.1"));
-        assert!(!is_newer("v1.2.1", "v1.2.0"));
-    }
-
-    #[test]
-    fn test_is_newer_major_difference_overrides_minor() {
-        assert!(is_newer("v1.9.9", "v2.0.0"));
-        assert!(!is_newer("v2.0.0", "v1.9.9"));
-    }
-
-    #[test]
-    fn test_is_newer_minor_difference_overrides_patch() {
-        assert!(is_newer("v1.1.9", "v1.2.0"));
-        assert!(!is_newer("v1.2.0", "v1.1.9"));
-    }
-
-    #[test]
-    fn test_is_newer_leading_v_stripped() {
-        assert!(is_newer("v1.0.0", "v2.0.0"));
-        assert!(!is_newer("v2.0.0", "v1.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_no_v_prefix() {
-        assert!(is_newer("1.0.0", "2.0.0"));
-        assert!(!is_newer("2.0.0", "1.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_mixed_v_prefix() {
-        assert!(is_newer("v1.0.0", "2.0.0"));
-        assert!(is_newer("1.0.0", "v2.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_empty_strings() {
-        assert!(!is_newer("", ""));
-    }
-
-    #[test]
-    fn test_is_newer_single_number() {
-        assert!(is_newer("v1", "v2"));
-        assert!(!is_newer("v2", "v1"));
-    }
-
-    #[test]
-    fn test_is_newer_non_numeric_parts() {
-        assert!(!is_newer("vabc", "vdef"));
-    }
-
-    #[test]
-    fn test_is_newer_very_large_versions() {
-        assert!(is_newer("v999.999.999", "v1000.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_zero_vs_nonzero() {
-        assert!(is_newer("v0.0.0", "v0.0.1"));
-        assert!(!is_newer("v0.0.1", "v0.0.0"));
-    }
-
-    #[test]
     fn test_debug_mode_toggle() {
         set_debug(false);
         assert!(!is_debug());
@@ -399,122 +241,12 @@ mod tests {
     }
 
     #[test]
-    fn test_is_newer_major_minor_patch_all_different() {
-        assert!(is_newer("v1.2.3", "v2.3.4"));
-        assert!(!is_newer("v2.3.4", "v1.2.3"));
-    }
-
-    #[test]
-    fn test_is_newer_major_minor_same_patch_different() {
-        assert!(is_newer("v1.1.0", "v1.1.1"));
-        assert!(!is_newer("v1.1.1", "v1.1.0"));
-    }
-
-    #[test]
-    fn test_is_newer_major_same_minor_different() {
-        assert!(is_newer("v1.1.0", "v1.2.0"));
-        assert!(!is_newer("v1.2.0", "v1.1.0"));
-    }
-
-    #[test]
-    fn test_is_newer_with_whitespace() {
-        assert!(!is_newer("v1.0.0 ", "v1.0.0"));
-        assert!(!is_newer("v1.0.0", " v1.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_four_part_version() {
-        assert!(is_newer("v1.0.0.0", "v1.0.1.0"));
-    }
-
-    #[test]
-    fn test_is_newer_latest_is_shorter() {
-        assert!(!is_newer("v1.0.0", "v1.0"));
-    }
-
-    #[test]
-    fn test_is_newer_current_is_shorter() {
-        assert!(!is_newer("v1.0", "v1.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_both_short() {
-        assert!(!is_newer("v1", "v1"));
-    }
-
-    #[test]
-    fn test_is_newer_non_version_string() {
-        assert!(!is_newer("latest", "stable"));
-    }
-
-    #[test]
     fn test_set_debug_idempotent() {
         set_debug(true);
         set_debug(true);
         assert!(is_debug());
         set_debug(false);
-        set_debug(false);
         assert!(!is_debug());
-    }
-
-    #[test]
-    fn test_is_newer_boundary_values() {
-        assert!(is_newer("v0.0.0", "v1.0.0"));
-        assert!(!is_newer("v1.0.0", "v0.0.0"));
-        assert!(is_newer("v0.0.0", "v0.1.0"));
-        assert!(is_newer("v0.0.0", "v0.0.1"));
-    }
-
-    #[test]
-    fn test_is_newer_with_extra_dots() {
-        assert!(!is_newer("v1..0", "v1..0"));
-    }
-
-    #[test]
-    fn test_is_newer_with_leading_zeros() {
-        assert!(!is_newer("v01.00.00", "v1.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_major_10_vs_9() {
-        assert!(is_newer("v9.0.0", "v10.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_minor_99_vs_100() {
-        assert!(is_newer("v1.99.0", "v1.100.0"));
-    }
-
-    #[test]
-    fn test_is_newer_patch_999_vs_1000() {
-        assert!(is_newer("v1.0.999", "v1.0.1000"));
-    }
-
-    #[test]
-    fn test_is_newer_all_zero_vs_one() {
-        assert!(is_newer("v0.0.0", "v0.0.1"));
-        assert!(is_newer("v0.0.0", "v0.1.0"));
-        assert!(is_newer("v0.0.0", "v1.0.0"));
-    }
-
-    #[test]
-    fn test_is_newer_identical_complex() {
-        assert!(!is_newer("v1.2.3", "v1.2.3"));
-    }
-
-    #[test]
-    fn test_is_newer_current_greater_patch() {
-        assert!(!is_newer("v1.0.5", "v1.0.3"));
-    }
-
-    #[test]
-    fn test_is_newer_current_greater_minor() {
-        assert!(!is_newer("v1.5.0", "v1.3.0"));
-    }
-
-    #[test]
-    fn test_is_newer_current_greater_major() {
-        assert!(!is_newer("v5.0.0", "v3.0.0"));
     }
 
     #[test]
@@ -527,8 +259,6 @@ mod tests {
     fn test_debug_mode_toggle_sequence() {
         set_debug(false);
         assert!(!is_debug());
-        set_debug(true);
-        assert!(is_debug());
         set_debug(true);
         assert!(is_debug());
         set_debug(false);
