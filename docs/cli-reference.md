@@ -28,7 +28,7 @@ Running `ghscaff` with no command starts the creation wizard (same as
 | Flag | Description |
 |---|---|
 | `--sponsor OWNER/REPO` | Enable GitHub Sponsor button on an existing repository |
-| `--dry-run` | Preview changes without making any API calls (rejected by `update`, which makes no API calls) |
+| `--dry-run` | Preview changes without making any API calls (rejected by `update`) |
 | `--help` | Show help for any command |
 | `--version` | Show ghscaff version |
 

@@ -69,7 +69,7 @@ no checksum file) and atomically replaces the running binary. Your `~/.ghscaff`
 state — encrypted vault and boilerplate cache — is never touched.
 
 If you installed ghscaff with `cargo install`, `ghscaff update` refuses to
-touch the binary and instead direct you to run:
+touch the binary and instead tells you to run:
 ```bash
 cargo install --force ghscaff
 ```

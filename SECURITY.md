@@ -88,14 +88,14 @@ The tool never prints, logs, or transmits tokens. Token input uses `inquire::Pas
 ### Network Communications
 
 - All GitHub API calls use HTTPS (via `rustls-tls`)
-- User-Agent is set to `ghscaff` (no identifying information beyond the tool name)
-- The only outbound call besides GitHub API is the update check (`GET /repos/UniverLab/ghscaff/releases/latest`), which can be disabled with `GHSCAFF_NO_UPDATE_CHECK=1`
+- User-Agent is `ghscaff` for GitHub API calls and `ghscaff-update` for update paths (no identifying information beyond the tool name)
+- The startup notice fetches the release list (`GET /repos/UniverLab/ghscaff/releases?per_page=100`) and silently does nothing on any failure; it can be disabled with `GHSCAFF_NO_UPDATE_CHECK=1` (which never affects the explicit `ghscaff update` command). Only the explicit command downloads release assets (`https://github.com/UniverLab/ghscaff/releases/download/{tag}/{asset}` plus `SHA256SUMS.txt`).
 
 ### Self-Update Mechanism
 
-The update checker fetches the latest release tag from GitHub API. If the user approves, it runs the install script from `raw.githubusercontent.com`. This is the same script used for initial installation.
+Updating is always explicit: only `ghscaff update` downloads anything, and only after consent (prompt defaults to NO; `--yes` skips it). It selects the newest stable release strictly newer than the running binary (drafts, prereleases and non-semver tags excluded), downloads the `ghscaff-{tag}-{arch}-{os}.tar.gz` asset for the current target, verifies its SHA256 against the release's `SHA256SUMS.txt` when present (missing file skips verification; missing entry or mismatch aborts), then atomically replaces the running binary (`std::env::current_exe()`, same-directory temp file plus rename). Binaries under `~/.cargo/bin` are refused with `cargo install --force ghscaff`. The update never touches `~/.ghscaff` state. `ghscaff update --check` only reports (exit 1 = available, 0 = current) and downloads nothing.
 
-**Mitigation:** The update only runs with explicit user confirmation via interactive prompt.
+**Mitigation:** The update only runs via the explicit `ghscaff update` command with user consent (default NO); the startup notice never prompts and never installs.
 
 ## Best Practices for Users
 
