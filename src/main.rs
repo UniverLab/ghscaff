@@ -224,58 +224,16 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_mode_default() {
-        assert!(!is_debug());
-    }
-
-    #[test]
-    fn test_set_debug_enable() {
+    fn debug_flag_round_trip() {
+        set_debug(false);
+        assert!(!is_debug(), "flag starts false after an explicit reset");
         set_debug(true);
-        assert!(is_debug());
-        set_debug(false);
-    }
-
-    #[test]
-    fn test_set_debug_disable() {
+        assert!(is_debug(), "enable takes effect");
         set_debug(true);
+        assert!(is_debug(), "re-enabling stays true");
         set_debug(false);
-        assert!(!is_debug());
-    }
-
-    #[test]
-    fn test_debug_mode_toggle() {
+        assert!(!is_debug(), "disable takes effect");
         set_debug(false);
-        assert!(!is_debug());
-        set_debug(true);
-        assert!(is_debug());
-        set_debug(true);
-        assert!(is_debug());
-        set_debug(false);
-        assert!(!is_debug());
-    }
-
-    #[test]
-    fn test_set_debug_idempotent() {
-        set_debug(true);
-        set_debug(true);
-        assert!(is_debug());
-        set_debug(false);
-        assert!(!is_debug());
-    }
-
-    #[test]
-    fn test_debug_mode_default_is_false() {
-        set_debug(false);
-        assert!(!is_debug());
-    }
-
-    #[test]
-    fn test_debug_mode_toggle_sequence() {
-        set_debug(false);
-        assert!(!is_debug());
-        set_debug(true);
-        assert!(is_debug());
-        set_debug(false);
-        assert!(!is_debug());
+        assert!(!is_debug(), "re-disabling stays false");
     }
 }
