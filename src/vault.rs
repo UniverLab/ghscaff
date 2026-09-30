@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
+use crypto_secretbox::aead::KeyInit;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use xsalsa20poly1305::KeyInit;
 
 const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
@@ -48,11 +48,11 @@ fn vault_path() -> Result<PathBuf> {
 
 /// File format: [nonce:24][ciphertext+poly1305_tag]
 fn save_to_path(data: &VaultData, passphrase: &str, path: &Path) -> Result<()> {
-    use crypto_box::aead::{generic_array::GenericArray, rand_core::RngCore, Aead, OsRng};
+    use crypto_secretbox::aead::{generic_array::GenericArray, rand_core::RngCore, Aead, OsRng};
 
     let key_bytes = derive_key(passphrase)?;
     let key = GenericArray::from_slice(&key_bytes);
-    let cipher = xsalsa20poly1305::XSalsa20Poly1305::new(key);
+    let cipher = crypto_secretbox::XSalsa20Poly1305::new(key);
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -99,7 +99,7 @@ fn save_to_path(data: &VaultData, passphrase: &str, path: &Path) -> Result<()> {
 }
 
 fn load_from_path(passphrase: &str, path: &Path) -> Result<Option<VaultData>> {
-    use crypto_box::aead::{generic_array::GenericArray, Aead};
+    use crypto_secretbox::aead::{generic_array::GenericArray, Aead};
 
     if !path.exists() {
         return Ok(None);
@@ -113,7 +113,7 @@ fn load_from_path(passphrase: &str, path: &Path) -> Result<Option<VaultData>> {
     let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
     let key_bytes = derive_key(passphrase)?;
     let key = GenericArray::from_slice(&key_bytes);
-    let cipher = xsalsa20poly1305::XSalsa20Poly1305::new(key);
+    let cipher = crypto_secretbox::XSalsa20Poly1305::new(key);
     let nonce = GenericArray::from_slice(nonce_bytes);
 
     let plaintext = cipher
@@ -316,6 +316,62 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Decryption failed"));
+    }
+
+    /// A value sealed directly with `crypto_secretbox` (the crate that
+    /// replaced `xsalsa20poly1305`) must open with the same key material and
+    /// file layout the vault uses: `[nonce:24][ciphertext + 16-byte tag]`,
+    /// key derived from the passphrase via `derive_key`.
+    #[test]
+    fn sealed_value_opens_with_same_key_material() {
+        use crypto_secretbox::aead::{
+            generic_array::GenericArray, rand_core::RngCore, Aead, OsRng,
+        };
+
+        let passphrase = "sealed-with-new-crate";
+        let key_bytes = derive_key(passphrase).unwrap();
+        let cipher = crypto_secretbox::XSalsa20Poly1305::new(GenericArray::from_slice(&key_bytes));
+
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce_bytes);
+
+        let plaintext = serde_json::to_vec(&VaultData {
+            github_token: Some("ghp_sealed_probe".into()),
+            has_passphrase: true,
+            secrets: HashMap::from([("SEALED_KEY".into(), "sealed_value".into())]),
+        })
+        .unwrap();
+
+        let ciphertext = cipher
+            .encrypt(GenericArray::from_slice(&nonce_bytes), plaintext.as_ref())
+            .unwrap();
+        // XSalsa20Poly1305 overhead: 16-byte Poly1305 tag, nonce stored beside it
+        assert_eq!(ciphertext.len(), plaintext.len() + 16);
+
+        let mut blob = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+        blob.extend_from_slice(&nonce_bytes);
+        blob.extend_from_slice(&ciphertext);
+
+        // Same key material opens it through the production reader.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        std::fs::write(&path, &blob).unwrap();
+        let loaded = load_from_path(passphrase, &path).unwrap().unwrap();
+        assert_eq!(loaded.github_token.as_deref(), Some("ghp_sealed_probe"));
+        assert_eq!(loaded.secrets.get("SEALED_KEY").unwrap(), "sealed_value");
+
+        // Different key material must not open the same blob.
+        let (nonce_read, ciphertext_read) = blob.split_at(NONCE_LEN);
+        let wrong_key = derive_key("different-passphrase").unwrap();
+        assert_ne!(wrong_key, key_bytes);
+        let wrong_cipher =
+            crypto_secretbox::XSalsa20Poly1305::new(GenericArray::from_slice(&wrong_key));
+        assert!(wrong_cipher
+            .decrypt(
+                GenericArray::from_slice(nonce_read),
+                ciphertext_read.as_ref()
+            )
+            .is_err());
     }
 
     #[test]
