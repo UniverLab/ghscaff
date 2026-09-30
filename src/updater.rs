@@ -206,11 +206,16 @@ fn success_line(latest: &str) -> String {
 /// case the one-line cause goes to stderr. A check failure never becomes an
 /// `Err`; only install-phase failures (download, checksum, permissions) do,
 /// and those exit 1 through the normal error print.
-pub fn run_update(check: bool, yes: bool) -> Result<i32> {
+pub fn run_update(
+    check: bool,
+    yes: bool,
+    fetcher: &dyn ReleaseFetcher,
+    downloader: &dyn BinaryDownloader,
+) -> Result<i32> {
     let current = current_version();
     // A check failure becomes data (one-line error chain), not an Err: the
     // hermetic core turns it into exit 2 in both `--check` and plain mode.
-    let releases = fetch_releases_with(&RealFetcher::new()).map_err(|error| format!("{error:#}"));
+    let releases = fetch_releases_with(fetcher).map_err(|error| format!("{error:#}"));
     let latest = releases
         .as_ref()
         .ok()
@@ -227,7 +232,7 @@ pub fn run_update(check: bool, yes: bool) -> Result<i32> {
             exe: Path::new("/tmp/ghscaff-update-test/ghscaff"),
             cargo_bin: None,
             target: Ok(("x86_64", "unknown-linux-musl")),
-            downloader: &RealDownloader,
+            downloader,
             confirm: &|| false,
         };
         return run_update_with(check, yes, &deps);
@@ -258,7 +263,7 @@ pub fn run_update(check: bool, yes: bool) -> Result<i32> {
         exe: &exe,
         cargo_bin: cargo_bin.as_deref(),
         target,
-        downloader: &RealDownloader,
+        downloader,
         confirm: &|| {
             inquire::Confirm::new(&format!("Update to {}? [y/N]", display_version(&latest)))
                 .with_default(false)
@@ -491,7 +496,7 @@ pub fn download_verify_extract_with(
 ) -> Result<()> {
     let asset = asset_name(tag, target.0, target.1);
     let bytes = downloader.download(&asset_url(tag, target))?;
-    if verify_checksum(downloader, tag, &asset, &bytes)? == Check::Skipped {
+    if let Check::Skipped = verify_checksum(downloader, tag, &asset, &bytes)? {
         println!("  ℹ checksum skipped (release ships no SHA256SUMS.txt)");
     }
     extract_binary(std::io::Cursor::new(bytes), output)

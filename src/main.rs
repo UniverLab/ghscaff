@@ -97,7 +97,12 @@ fn main() -> Result<()> {
         if cli.dry_run {
             anyhow::bail!("--dry-run has no effect on update");
         }
-        let code = updater::run_update(*check, *yes)?;
+        let code = updater::run_update(
+            *check,
+            *yes,
+            &updater::RealFetcher::new(),
+            &updater::RealDownloader,
+        )?;
         std::process::exit(code);
     }
 

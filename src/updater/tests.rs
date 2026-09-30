@@ -1,17 +1,14 @@
 use super::*;
 use std::cell::RefCell;
 use std::io::Write;
-use std::sync::{Mutex, OnceLock};
+use std::sync::MutexGuard;
 
-/// Tests that read or write process-wide environment (only the
-/// state-untouched test does) serialize on this lock; tests run in
+/// Tests that read or write process-wide environment serialize on the one
+/// crate-wide lock, so a `HOME` swap here can never overlap with the `vault`,
+/// `apply` or `wizard` tests that swap the same variable; tests run in
 /// parallel by default.
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    ENV_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+fn env_lock() -> MutexGuard<'static, ()> {
+    crate::github::test_utils::env_lock()
 }
 
 fn make_tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -1087,4 +1084,79 @@ fn is_cargo_managed_delegates_correctly() {
     std::fs::write(&exe, b"binary").unwrap();
     // Without a real cargo root, this should be false
     assert!(!is_cargo_managed(&exe));
+}
+
+// ── run_update exit codes through the injected seams ────────────
+
+fn release_list_body(tags: &[String]) -> String {
+    let entries: Vec<String> = tags
+        .iter()
+        .map(|tag| format!(r#"{{"tag_name":"{tag}","prerelease":false,"draft":false}}"#))
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
+#[test]
+fn check_notice_returns_some_for_newer_stable() {
+    let current = current_version();
+    let newer = fake_newer_tag();
+    let fetcher = FakeFetcher {
+        body: Ok(release_list_body(&[current.clone(), newer.clone()])),
+    };
+    assert_eq!(check_notice(&fetcher, &current), Some(newer));
+}
+
+#[test]
+fn run_update_up_to_date_exits_0() {
+    let current = current_version();
+    let fetcher = FakeFetcher {
+        body: Ok(release_list_body(std::slice::from_ref(&current))),
+    };
+    let downloader = RecordingDownloader::new(Vec::new(), Err("unused".into()));
+    assert_eq!(run_update(false, false, &fetcher, &downloader).unwrap(), 0);
+    assert!(
+        downloader.calls().is_empty(),
+        "up to date downloads nothing"
+    );
+}
+
+#[test]
+fn run_update_check_mode_exits_1_when_newer() {
+    let current = current_version();
+    let fetcher = FakeFetcher {
+        body: Ok(release_list_body(&[current, fake_newer_tag()])),
+    };
+    let downloader = RecordingDownloader::new(Vec::new(), Err("unused".into()));
+    assert_eq!(run_update(true, false, &fetcher, &downloader).unwrap(), 1);
+    assert!(downloader.calls().is_empty(), "--check downloads nothing");
+}
+
+#[test]
+fn run_update_check_failure_exits_2() {
+    let fetcher = FakeFetcher {
+        body: Err("dns failure".into()),
+    };
+    let downloader = RecordingDownloader::new(Vec::new(), Err("unused".into()));
+    assert_eq!(run_update(true, false, &fetcher, &downloader).unwrap(), 2);
+    assert!(downloader.calls().is_empty());
+}
+
+#[test]
+fn run_update_plain_mode_check_failure_exits_2() {
+    let fetcher = FakeFetcher {
+        body: Err("HTTP 403: rate limit exceeded".into()),
+    };
+    let downloader = RecordingDownloader::new(Vec::new(), Err("unused".into()));
+    assert_eq!(run_update(false, false, &fetcher, &downloader).unwrap(), 2);
+    assert!(downloader.calls().is_empty());
+}
+
+#[test]
+fn run_update_unparsable_response_exits_2() {
+    let fetcher = FakeFetcher {
+        body: Ok("not json".into()),
+    };
+    let downloader = RecordingDownloader::new(Vec::new(), Err("unused".into()));
+    assert_eq!(run_update(false, false, &fetcher, &downloader).unwrap(), 2);
+    assert!(downloader.calls().is_empty());
 }

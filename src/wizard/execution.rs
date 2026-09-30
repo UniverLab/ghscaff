@@ -8,6 +8,9 @@ use super::{
     WizardConfig,
 };
 
+#[cfg(test)]
+mod tests;
+
 /// Counts and prints the wizard's "[n/total]" progress lines. In dry-run
 /// mode the same lines are printed with a `[dry-run]` marker and the step
 /// body is never run.
@@ -341,6 +344,12 @@ fn configure_wizard_secrets_step(
     Ok(())
 }
 
+/// The clone-offer / sponsor-button follow-ups run only on a real
+/// (non dry-run) run that actually created a repo.
+fn followups_enabled(dry_run: bool, created: bool) -> bool {
+    !dry_run && created
+}
+
 pub(super) fn execute(
     client: &GithubClient,
     c: &WizardConfig,
@@ -391,7 +400,7 @@ pub(super) fn execute(
     }
     println!();
 
-    if !dry_run && created_repo.is_some() {
+    if followups_enabled(dry_run, created_repo.is_some()) {
         offer_gitkit_clone(&c.owner, &c.name);
         offer_sponsor_button(client, &c.owner, &c.name);
     }

@@ -334,6 +334,23 @@ fn collect_apply_team_access(client: &GithubClient, owner: &str) -> Result<Vec<t
     let want_teams = inquire::Confirm::new("Add team access?")
         .with_default(false)
         .prompt()?;
+    collect_team_access_after(client, owner, want_teams, |team_names| {
+        Ok(inquire::MultiSelect::new("Select teams:", team_names)
+            .with_help_message("space select  enter confirm")
+            .prompt_skippable()?)
+    })
+}
+
+/// The prompt-free remainder of [`collect_apply_team_access`]: list the org
+/// teams and collect the selection once the user already said yes. The
+/// team-selection prompt is injected so tests can drive every branch
+/// without a TTY.
+fn collect_team_access_after(
+    client: &GithubClient,
+    owner: &str,
+    want_teams: bool,
+    prompt_selections: impl Fn(Vec<String>) -> Result<Option<Vec<String>>>,
+) -> Result<Vec<teams::TeamAccess>> {
     if !want_teams {
         return Ok(vec![]);
     }
@@ -346,19 +363,26 @@ fn collect_apply_team_access(client: &GithubClient, owner: &str) -> Result<Vec<t
     }
 
     let team_names: Vec<String> = org_teams.iter().map(|t| t.name.clone()).collect();
-    let Ok(Some(selections)) = inquire::MultiSelect::new("Select teams:", team_names)
-        .with_help_message("space select  enter confirm")
-        .prompt_skippable()
-    else {
+    let Some(selections) = prompt_selections(team_names)? else {
         return Ok(vec![]);
     };
 
+    select_team_access(&org_teams, &selections, prompt_apply_team_permission)
+}
+
+/// Match each selected display name against the org team list and resolve
+/// the permission for every match through `permission_for`.
+fn select_team_access(
+    org_teams: &[teams::Team],
+    selections: &[String],
+    permission_for: impl Fn(&teams::Team) -> Result<teams::TeamAccess>,
+) -> Result<Vec<teams::TeamAccess>> {
     let mut selected_teams = vec![];
     for selected_team_display in selections {
-        let Some(team) = org_teams.iter().find(|t| t.name == selected_team_display) else {
+        let Some(team) = org_teams.iter().find(|t| t.name == *selected_team_display) else {
             continue;
         };
-        selected_teams.push(prompt_apply_team_permission(team)?);
+        selected_teams.push(permission_for(team)?);
     }
     Ok(selected_teams)
 }
@@ -541,7 +565,12 @@ fn apply_missing_secrets_step(target: &ApplyTarget) -> Result<()> {
 pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     let target = ApplyTarget::resolve(repo_arg)?;
     let ctx = print_apply_preview(&target)?;
+    apply_changes(&target, &ctx, dry_run)
+}
 
+/// The prompt-free remainder of [`run_apply`] after the preview: honour
+/// `dry_run`, then collect the team selection and the final confirmation.
+fn apply_changes(target: &ApplyTarget, ctx: &ApplyContext, dry_run: bool) -> Result<()> {
     if dry_run {
         println!();
         println!("  [dry-run] No changes applied.");
@@ -556,6 +585,17 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
         .with_default(true)
         .prompt()?;
 
+    apply_confirmed(target, ctx, &selected_teams, confirmed)
+}
+
+/// Run every apply step once the user confirmed; a declined confirmation
+/// aborts before any request is made.
+fn apply_confirmed(
+    target: &ApplyTarget,
+    ctx: &ApplyContext,
+    selected_teams: &[teams::TeamAccess],
+    confirmed: bool,
+) -> Result<()> {
     if !confirmed {
         println!("  Aborted.");
         return Ok(());
@@ -564,12 +604,12 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
     // Apply all changes
     println!();
     println!("  Applying changes...");
-    apply_labels_step(&target)?;
-    apply_branch_protection_step(&target)?;
-    apply_develop_branch_step(&target, &ctx)?;
-    apply_topics_step(&target)?;
-    apply_team_access_step(&target, &selected_teams)?;
-    apply_missing_secrets_step(&target)?;
+    apply_labels_step(target)?;
+    apply_branch_protection_step(target)?;
+    apply_develop_branch_step(target, ctx)?;
+    apply_topics_step(target)?;
+    apply_team_access_step(target, selected_teams)?;
+    apply_missing_secrets_step(target)?;
 
     println!();
     println!("  Done!");
@@ -610,6 +650,9 @@ fn create_develop_branch(client: &GithubClient, owner: &str, repo_name: &str) ->
     branches::create_branch(client, owner, repo_name, "develop", &main_sha)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod step_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1582,7 +1625,9 @@ mod tests {
 
     #[test]
     fn detect_template_secrets_finds_rust_markers() {
+        use super::super::github::test_utils::env_lock;
         use base64::{engine::general_purpose::STANDARD, Engine};
+        let _guard = env_lock();
 
         let cargo_encoded = STANDARD.encode(b"[package]\nname = \"test\"");
 

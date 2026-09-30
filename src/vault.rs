@@ -1282,8 +1282,7 @@ mod tests {
         let _result = exists();
     }
 
-    use std::sync::Mutex;
-    static VAULT_MUTEX: Mutex<()> = Mutex::new(());
+    use crate::github::test_utils::env_lock;
 
     /// Points `HOME` (and thus `vault_path()`) at a private temp directory
     /// for the lifetime of the guard, restoring the previous value on drop.
@@ -1305,8 +1304,8 @@ mod tests {
         fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
             let previous = std::env::var_os("HOME");
-            // SAFETY: guarded by VAULT_MUTEX, so no other thread in this
-            // process observes or mutates HOME concurrently.
+            // SAFETY: guarded by the shared `env_lock`, so no other thread
+            // in this process observes or mutates HOME concurrently.
             unsafe { std::env::set_var("HOME", dir.path()) };
             Self {
                 _dir: dir,
@@ -1317,7 +1316,7 @@ mod tests {
 
     impl Drop for HomeGuard {
         fn drop(&mut self) {
-            // SAFETY: same guarantee as in `new` — still under VAULT_MUTEX.
+            // SAFETY: same guarantee as in `new` — still under `env_lock`.
             match self.previous.take() {
                 Some(home) => unsafe { std::env::set_var("HOME", home) },
                 None => unsafe { std::env::remove_var("HOME") },
@@ -1327,7 +1326,7 @@ mod tests {
 
     #[test]
     fn test_save_load_via_wrappers_with_backup() {
-        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = env_lock();
         let _home = HomeGuard::new();
 
         let data = VaultData {
@@ -1343,7 +1342,7 @@ mod tests {
 
     #[test]
     fn test_destroy_nonexistent_returns_false() {
-        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = env_lock();
         let _home = HomeGuard::new();
 
         assert!(!exists());
@@ -1353,7 +1352,7 @@ mod tests {
 
     #[test]
     fn test_destroy_existing_returns_true() {
-        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = env_lock();
         let _home = HomeGuard::new();
 
         save(&VaultData::default(), "").unwrap();
@@ -1365,7 +1364,7 @@ mod tests {
 
     #[test]
     fn test_save_secret_public_api_with_backup() {
-        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = env_lock();
         let _home = HomeGuard::new();
 
         save_secret("GHSCAFF_PUB_SEC", "pub_val", "").unwrap();
@@ -1375,7 +1374,7 @@ mod tests {
 
     #[test]
     fn test_save_secret_overwrite_public_api() {
-        let _lock = VAULT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = env_lock();
         let _home = HomeGuard::new();
 
         save_secret("GHSCAFF_OW2", "first", "").unwrap();
