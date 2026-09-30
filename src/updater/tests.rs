@@ -120,6 +120,38 @@ fn tmp_staging_for(exe: &Path) -> PathBuf {
     exe.parent().unwrap().join(format!(".{name}.update"))
 }
 
+/// Run the injected-fetcher path end to end the way `run_update` wires it:
+/// fetch → one-line error string → hermetic core. Returns the exit code.
+fn exit_when_release_lookup_fails(check: bool, body: std::result::Result<String, String>) -> i32 {
+    let current = current_version();
+    let dir = tempfile::tempdir().unwrap();
+    let exe = make_exe(dir.path());
+    let fetcher = FakeFetcher { body };
+    let releases = fetch_releases_with(&fetcher).map_err(|error| format!("{error:#}"));
+    assert!(releases.is_err(), "test premise: the lookup must fail");
+    let downloader = RecordingDownloader::new(Vec::new(), Err("unused".into()));
+    let deps = UpdateDeps {
+        current: &current,
+        releases,
+        exe: &exe,
+        cargo_bin: None,
+        target: Ok(("x86_64", "unknown-linux-musl")),
+        downloader: &downloader,
+        confirm: &|| panic!("must not prompt"),
+    };
+    let code = run_update_with(check, false, &deps).unwrap();
+    assert!(
+        downloader.calls().is_empty(),
+        "a failed check downloads nothing"
+    );
+    assert_eq!(
+        std::fs::read(&exe).unwrap(),
+        b"old-binary",
+        "state untouched"
+    );
+    code
+}
+
 // ── ①② --check exit codes ───────────────────────────────────
 
 #[test]
@@ -498,24 +530,78 @@ fn target_error_fails_before_touching_the_downloader() {
 }
 
 #[test]
-fn release_lookup_error_is_loud() {
-    let current = current_version();
-    let dir = tempfile::tempdir().unwrap();
-    let exe = make_exe(dir.path());
-    let downloader = RecordingDownloader::new(Vec::new(), Err("unused".into()));
-    let deps = UpdateDeps {
-        current: &current,
-        releases: Err("HTTP 403: rate limit exceeded".into()),
-        exe: &exe,
-        cargo_bin: None,
-        target: Ok(("x86_64", "unknown-linux-musl")),
-        downloader: &downloader,
-        confirm: &|| panic!("must not prompt"),
-    };
+fn check_exits_2_when_the_release_lookup_fails() {
+    assert_eq!(
+        exit_when_release_lookup_fails(true, Err("dns failure".into())),
+        2
+    );
+}
 
-    let err = run_update_with(false, false, &deps).unwrap_err();
-    assert!(err.to_string().contains("release lookup failed"), "{err:#}");
-    assert!(downloader.calls().is_empty());
+#[test]
+fn check_exits_2_on_an_unparsable_response() {
+    assert_eq!(
+        exit_when_release_lookup_fails(true, Ok("not json".into())),
+        2
+    );
+}
+
+#[test]
+fn plain_update_exits_2_when_the_release_lookup_fails() {
+    assert_eq!(
+        exit_when_release_lookup_fails(false, Err("HTTP 403: rate limit exceeded".into())),
+        2
+    );
+}
+
+// ── exit-2 wording: one stderr line, cause named ─────────────
+
+/// The check-error string is what lands on stderr: it must be a single
+/// line that names the cause.
+#[test]
+fn check_failure_cause_is_a_single_stderr_line() {
+    for cause in [
+        "failed to fetch GitHub releases: dns error: no such host",
+        "failed to fetch GitHub releases: error sending request (TLS handshake)",
+        "GitHub releases request failed: HTTP 403 Forbidden",
+        "failed to parse releases JSON: expected value at line 1 column 1",
+    ] {
+        let error = anyhow!(cause);
+        let line = format!("update check failed: {error:#}");
+        assert!(!line.contains('\n'), "one line only: {line:?}");
+        assert!(line.contains(cause), "names the cause: {line}");
+    }
+}
+
+// ── output wording: bare versions, no restart advice ─────────
+
+#[test]
+fn display_version_strips_only_a_leading_v() {
+    assert_eq!(display_version("v0.6.0"), "0.6.0");
+    assert_eq!(display_version("0.6.0"), "0.6.0");
+    assert_eq!(display_version(""), "");
+}
+
+#[test]
+fn success_line_has_bare_version_and_no_restart_advice() {
+    assert_eq!(success_line("v0.6.0"), "✓ updated to 0.6.0");
+}
+
+#[test]
+fn arrow_line_drops_the_v_prefix() {
+    assert_eq!(arrow_line("v0.0.1", "v0.6.0"), "ghscaff 0.0.1 → 0.6.0");
+}
+
+#[test]
+fn up_to_date_line_drops_the_v_prefix() {
+    assert_eq!(up_to_date_line("v0.6.0"), "ghscaff 0.6.0 is up to date");
+}
+
+#[test]
+fn cargo_refusal_is_a_full_sentence() {
+    assert_eq!(
+        cargo_refusal_line(),
+        "installed with cargo — run: cargo install --force ghscaff"
+    );
 }
 
 // ── ⑪⑬⑭ checksum rules (install.sh semantics) ──────────────

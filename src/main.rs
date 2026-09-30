@@ -67,8 +67,13 @@ enum Command {
         repo: Option<String>,
     },
     /// Update ghscaff to the latest stable release (always asks first)
+    ///
+    /// Exit codes: 0 = up to date (or update installed / declined /
+    /// cargo-managed refusal), 1 = an update is available (--check mode),
+    /// 2 = the update check could not be completed (network, HTTP, or an
+    /// unparsable response; the cause is printed on stderr).
     Update {
-        /// Only report whether an update is available (exit 1 = yes, 0 = no)
+        /// Only report whether an update is available (exit 0 = up to date, 1 = update available, 2 = check failed)
         #[arg(long)]
         check: bool,
         /// Do not prompt; proceed if an update is available
@@ -159,7 +164,11 @@ fn check_for_update() {
     let fetcher = updater::RealFetcher::with_timeout(std::time::Duration::from_secs(3));
     let current = updater::current_version();
     if let Some(tag) = updater::check_notice(&fetcher, &current) {
-        println!("  \x1b[33m⬆  Update available:\x1b[0m {current} → {tag} — run 'ghscaff update'");
+        println!(
+            "  \x1b[33m⬆  Update available:\x1b[0m {} → {} — run 'ghscaff update'",
+            updater::display_version(&current),
+            updater::display_version(&tag)
+        );
     }
 }
 

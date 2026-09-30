@@ -21,7 +21,7 @@ Running `ghscaff` with no command starts the creation wizard (same as
 | `ghscaff apply [owner/repo]` | Configure an existing repository (auto-detected from git remote if omitted) |
 | `ghscaff doctor [owner/repo]` | Verify that required status checks can be satisfied (auto-detected from git remote if omitted) |
 | `ghscaff config` | Reconfigure credentials — wipes the vault and starts fresh |
-| `ghscaff update [--check] [--yes]` | Update to the latest stable release; always asks first. `--check` only reports (exit 1 = available, 0 = current) |
+| `ghscaff update [--check] [--yes]` | Update to the latest stable release; always asks first. Exit codes: 0 = up to date (or installed / declined / cargo refusal), 1 = update available (`--check`), 2 = update check could not be completed (cause on stderr; also applies to plain `update`) |
 
 ## Global flags
 

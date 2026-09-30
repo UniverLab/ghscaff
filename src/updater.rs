@@ -9,6 +9,17 @@
 //! (release list, archive bytes, prompt answer, executable path, target) is
 //! injected through [`UpdateDeps`], so the unit tests below never touch the
 //! network.
+//!
+//! Exit codes of `ghscaff update [--check]`:
+//!
+//! | code | meaning |
+//! |---|---|
+//! | `0` | up to date / update installed / prompt declined / cargo refusal |
+//! | `1` | `--check` only: a newer stable release **is available** |
+//! | `2` | the release **check could not be completed** (network, DNS, TLS, HTTP ≥ 400, unparsable response); the cause is the single line printed on stderr. Applies to `--check` *and* plain `update`. |
+//!
+//! Failures *after* a successful check (download, checksum, permissions)
+//! remain ordinary `Err`s and therefore exit 1 with the normal error print.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
@@ -20,6 +31,15 @@ const GITHUB_REPO: &str = "UniverLab/ghscaff";
 /// The exact remediation printed when the running binary lives below
 /// `~/.cargo/bin`: cargo owns that file, so ghscaff refuses to replace it.
 pub const CARGO_INSTALL_HINT: &str = "cargo install --force ghscaff";
+
+/// `ghscaff update`: nothing installed (up to date, cargo-managed,
+/// declined) — and, for `--check`, nothing newer found.
+const EXIT_NO_UPDATE: i32 = 0;
+/// `ghscaff update --check`: a newer stable release is available.
+const EXIT_UPDATE_AVAILABLE: i32 = 1;
+/// `ghscaff update [--check]`: the release check could not be completed
+/// (network, DNS, TLS, HTTP ≥ 400, unparsable response). Cause on stderr.
+const EXIT_CHECK_FAILED: i32 = 2;
 
 // ── Release lookup seams ────────────────────────────────────────
 
@@ -130,6 +150,9 @@ impl BinaryDownloader for RealDownloader {
 pub struct UpdateDeps<'a> {
     /// Current version tag, `v`-prefixed (e.g. `v0.6.0`).
     pub current: &'a str,
+    /// Release-list lookup outcome: `Err(cause)` means the check could not
+    /// be completed — the core prints the one-line cause on stderr and
+    /// returns exit code `2` instead of surfacing an `Err`.
     pub releases: std::result::Result<Vec<GitHubRelease>, String>,
     pub exe: &'a Path,
     /// Cargo install root; `None` skips the cargo guard entirely.
@@ -139,27 +162,68 @@ pub struct UpdateDeps<'a> {
     pub confirm: &'a dyn Fn() -> bool,
 }
 
+// ── Display helpers ─────────────────────────────────────────────
+
+/// Strip a leading `v` for human-facing version strings (`v0.6.0` → `0.6.0`).
+/// Release and asset URLs keep the raw tag; this is *only* for output.
+pub fn display_version(version: &str) -> &str {
+    version.strip_prefix('v').unwrap_or(version)
+}
+
+/// The `ghscaff 0.0.1 → 0.6.0` update-available arrow.
+fn arrow_line(current: &str, latest: &str) -> String {
+    format!(
+        "ghscaff {} → {}",
+        display_version(current),
+        display_version(latest)
+    )
+}
+
+/// The `ghscaff 0.6.0 is up to date` line.
+fn up_to_date_line(current: &str) -> String {
+    format!("ghscaff {} is up to date", display_version(current))
+}
+
+/// The cargo-managed refusal: a full sentence, not a bare command.
+fn cargo_refusal_line() -> String {
+    format!("installed with cargo — run: {CARGO_INSTALL_HINT}")
+}
+
+/// The post-replace success line: no restart advice — the swap is in place
+/// and the next invocation already runs the new binary.
+fn success_line(latest: &str) -> String {
+    format!("✓ updated to {}", display_version(latest))
+}
+
 // ── Public update entry points ───────────────────────────────────
 
 /// Check for and, after consent, install the latest stable release.
 ///
-/// The returned integer is the process exit code: `0` means no update was
-/// installed (already current, a declined prompt, or a cargo-managed
-/// install) and `1` means an update was available in `--check` mode.
-/// Network and API errors surface as `Err` — the explicit command fails
-/// loudly, unlike the silent startup notice.
+/// The returned integer is the process exit code: `0` = up to date (or
+/// update installed / declined / cargo-managed refusal), `1` = an update is
+/// available in `--check` mode, `2` = the release check could not be
+/// completed (network, DNS, TLS, HTTP ≥ 400, unparsable response) — in that
+/// case the one-line cause goes to stderr. A check failure never becomes an
+/// `Err`; only install-phase failures (download, checksum, permissions) do,
+/// and those exit 1 through the normal error print.
 pub fn run_update(check: bool, yes: bool) -> Result<i32> {
     let current = current_version();
-    let releases = fetch_releases_with(&RealFetcher::new())?;
+    // A check failure becomes data (one-line error chain), not an Err: the
+    // hermetic core turns it into exit 2 in both `--check` and plain mode.
+    let releases = fetch_releases_with(&RealFetcher::new()).map_err(|error| format!("{error:#}"));
+    let latest = releases
+        .as_ref()
+        .ok()
+        .and_then(|releases| select_latest_stable(releases, &current));
 
     // The first pass is limited to the network result. The hermetic core
     // below owns all output and consent, so `--check` cannot touch a local
-    // path or the target before it returns.
-    let latest = select_latest_stable(&releases, &current);
+    // path or the target before it returns — and a failed check returns
+    // exit 2 here, before any of those facts are resolved.
     if latest.is_none() || check {
         let deps = UpdateDeps {
             current: &current,
-            releases: Ok(releases),
+            releases,
             exe: Path::new("/tmp/ghscaff-update-test/ghscaff"),
             cargo_bin: None,
             target: Ok(("x86_64", "unknown-linux-musl")),
@@ -171,6 +235,7 @@ pub fn run_update(check: bool, yes: bool) -> Result<i32> {
 
     // An actual install needs the executable and target facts. Resolve them
     // only after the read-only pass established that a newer release exists.
+    let releases = releases.expect("a newer release was found above");
     let latest = latest.expect("newer release was established above");
     let exe = std::env::current_exe().context("failed to locate ghscaff executable")?;
     let cargo_bin = cargo_install_root();
@@ -195,7 +260,7 @@ pub fn run_update(check: bool, yes: bool) -> Result<i32> {
         target,
         downloader: &RealDownloader,
         confirm: &|| {
-            inquire::Confirm::new(&format!("Update to {latest}? [y/N]"))
+            inquire::Confirm::new(&format!("Update to {}? [y/N]", display_version(&latest)))
                 .with_default(false)
                 .prompt()
                 .unwrap_or(false)
@@ -206,23 +271,29 @@ pub fn run_update(check: bool, yes: bool) -> Result<i32> {
 
 /// Hermetic update flow used by unit tests and embedders. It has no
 /// network or filesystem setup step; callers provide those facts through
-/// [`UpdateDeps`]. Exit codes follow the contract of [`run_update`].
+/// [`UpdateDeps`]. Exit codes follow the contract of [`run_update`]: `Ok(2)`
+/// with one stderr line when `deps.releases` is an `Err` (the check could
+/// not be completed), `Ok(1)` for an available update under `--check`,
+/// `Ok(0)` otherwise; local failures surface as `Err`.
 pub fn run_update_with(check: bool, yes: bool, deps: &UpdateDeps<'_>) -> Result<i32> {
-    let releases = deps
-        .releases
-        .as_ref()
-        .map_err(|error| anyhow!("release lookup failed: {error}"))?;
-    let Some(latest) = select_latest_stable(releases, deps.current) else {
-        println!("ghscaff {} is up to date", deps.current);
-        return Ok(0);
+    let releases = match &deps.releases {
+        Ok(releases) => releases,
+        Err(error) => {
+            eprintln!("update check failed: {error}");
+            return Ok(EXIT_CHECK_FAILED);
+        }
     };
-    println!("ghscaff {} → {latest}", deps.current);
+    let Some(latest) = select_latest_stable(releases, deps.current) else {
+        println!("{}", up_to_date_line(deps.current));
+        return Ok(EXIT_NO_UPDATE);
+    };
+    println!("{}", arrow_line(deps.current, &latest));
 
     // `--check` ends here: exit 1 = update available, 0 = already current.
     // Nothing below this line — cargo guard, target, prompt, download — may
     // run in read-only mode.
     if check {
-        return Ok(1);
+        return Ok(EXIT_UPDATE_AVAILABLE);
     }
 
     // Cargo owns `~/.cargo/bin`; refuse before anything is downloaded.
@@ -230,8 +301,8 @@ pub fn run_update_with(check: bool, yes: bool, deps: &UpdateDeps<'_>) -> Result<
         .cargo_bin
         .is_some_and(|root| is_cargo_managed_with_root(deps.exe, Some(root.to_path_buf())))
     {
-        println!("{CARGO_INSTALL_HINT}");
-        return Ok(0);
+        println!("{}", cargo_refusal_line());
+        return Ok(EXIT_NO_UPDATE);
     }
 
     let (arch, os) = *deps
@@ -241,7 +312,7 @@ pub fn run_update_with(check: bool, yes: bool, deps: &UpdateDeps<'_>) -> Result<
 
     if !yes && !(deps.confirm)() {
         println!("Aborted.");
-        return Ok(0);
+        return Ok(EXIT_NO_UPDATE);
     }
 
     let exe = deps.exe;
@@ -258,8 +329,8 @@ pub fn run_update_with(check: bool, yes: bool, deps: &UpdateDeps<'_>) -> Result<
         download_verify_extract_with(deps.downloader, &latest, (arch, os), out)
     })?;
 
-    println!("  ✓ Updated ghscaff to {latest} — restart your terminal to use it.");
-    Ok(0)
+    println!("{}", success_line(&latest));
+    Ok(EXIT_NO_UPDATE)
 }
 
 // ── Version helpers ─────────────────────────────────────────────

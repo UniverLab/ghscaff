@@ -101,22 +101,28 @@ Check the [Releases](https://github.com/UniverLab/ghscaff/releases) page for pre
 Updating is always explicit — ghscaff never installs anything on its own:
 
 ```bash
-ghscaff update            # asks "Update to v0.7.0? [y/N]" — default is NO
+ghscaff update            # asks "Update to 0.7.0? [y/N]" — default is NO
 ghscaff update --yes      # skip the prompt
-ghscaff update --check    # report only: exit 1 = update available, 0 = current
+ghscaff update --check    # report only: exit 0 = up to date, 1 = update available, 2 = the check could not be completed
 ```
 
 On "yes", ghscaff downloads the release asset for your platform, verifies it
 against the release's `SHA256SUMS.txt` (verification is skipped only when the
 release ships no checksum file) and atomically replaces the running binary.
+On success it prints `✓ updated to <version>` — no restart needed, the running
+binary is replaced in place and the next invocation already runs the new one.
 Your `~/.ghscaff` state — encrypted vault and boilerplate cache — is never
 touched: it is not the binary.
 
+Exit codes: `ghscaff update` (with or without `--check`) exits **2** when the
+release check cannot be completed — no network, DNS or TLS failure, HTTP ≥ 400,
+or an unparsable release-list response — and prints the cause on stderr; other
+failures (download, checksum, permissions) are ordinary errors (exit 1).
+`--check` exits 1 when an update is available, 0 when the binary is current.
+
 If you installed ghscaff with `cargo install`, `ghscaff update` refuses to
-touch the binary and instead tells you to run:
-```bash
-cargo install --force ghscaff
-```
+touch the binary and instead prints:
+`installed with cargo — run: cargo install --force ghscaff`
 
 On startup ghscaff only *notices* new releases and prints a one-line hint to
 run `ghscaff update` — it never prompts and never installs. To silence the
