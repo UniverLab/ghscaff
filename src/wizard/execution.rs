@@ -195,7 +195,9 @@ fn commit_init_files_step(
     })
 }
 
-/// Step 4 — develop branch off the just-committed default branch.
+/// Step 4 — develop branch off the just-committed default branch. In dry-run
+/// the branch SHA is not fetched: the repo was never created and the SHA is
+/// only consumed by the op the dry-run skips.
 fn create_develop_step(
     progress: &mut StepCounter,
     client: &GithubClient,
@@ -205,7 +207,7 @@ fn create_develop_step(
     if !c.create_develop {
         return Ok(());
     }
-    if init_sha.is_empty() {
+    if init_sha.is_empty() && !progress.dry_run {
         *init_sha = branches::get_branch_sha(client, &c.owner, &c.name, &c.default_branch)?;
     }
     let sha = init_sha.as_str();

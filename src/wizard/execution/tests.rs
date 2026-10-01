@@ -298,6 +298,23 @@ fn create_develop_step_propagates_error() {
     assert!(create_develop_step(&mut progress, &client, &config, &mut sha).is_err());
 }
 
+#[test]
+fn create_develop_step_dry_run_fetches_no_branch_sha() {
+    // A dry run never created the repo, so reading `main` back would 404 and
+    // abort the whole dry run; the SHA is only consumed by the skipped op.
+    let (url, log) = start_recording_mock_server(|_, path| {
+        panic!("no requests expected for a dry run, got: {path}")
+    });
+    let client = mock_client(&url);
+    let mut config = minimal_config();
+    config.create_develop = true;
+    let mut progress = StepCounter::new(4, true);
+    let mut sha = String::new();
+    create_develop_step(&mut progress, &client, &config, &mut sha).unwrap();
+    assert!(sha.is_empty());
+    assert!(snapshot(&log).is_empty());
+}
+
 // ── apply_wizard_protections_step ─────────────────────────────────
 
 fn protections_handler(put_status: u16) -> impl Fn(&str, &str) -> (u16, String) {

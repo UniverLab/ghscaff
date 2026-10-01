@@ -251,7 +251,9 @@ fn cache_dir() -> Result<PathBuf> {
 /// In addition, no license means no `LICENSE` file — and for rust no
 /// `release.yml` — so the rendered docs stop describing them: every
 /// language's `README.md` loses its `## License` section and, for rust,
-/// `CONTRIBUTING.md` loses its `## Release process` section.
+/// `CONTRIBUTING.md` loses its `## Release process` section plus the rest of
+/// its dropped-publish story (the `release.yml` clause in the CI paragraph and
+/// the `CARGO_REGISTRY_TOKEN` in `### Required repository secrets`).
 ///
 /// * rust — the crate cannot be published without a LICENSE, so drop the
 ///   publish-only release workflow, stop referencing a LICENSE file, and pass
@@ -268,9 +270,7 @@ fn adjust_for_no_license(
     }
     let content = match rel {
         "README.md" => remove_markdown_section(&content, "## License"),
-        "CONTRIBUTING.md" if language == "rust" => {
-            remove_markdown_section(&content, "## Release process")
-        }
+        "CONTRIBUTING.md" if language == "rust" => strip_rust_release_docs(&content),
         _ => content,
     };
     if language == "rust" {
@@ -411,6 +411,24 @@ fn remove_markdown_section(text: &str, heading: &str) -> String {
         .collect();
     kept.extend(lines[end..].iter().copied().map(str::to_string));
     join_lines(kept, text.ends_with('\n'))
+}
+
+/// CONTRIBUTING.md tells contributors how the crate is published in three
+/// places, all of which become false for an unpublished crate: the `## Release
+/// process` section describing the dropped `release.yml` workflow, the "and
+/// automated releases (`.github/workflows/release.yml`)" clause in the CI
+/// paragraph, and the `### Required repository secrets` subsection whose only
+/// row is the `CARGO_REGISTRY_TOKEN` publish token. Trim the two sections and
+/// the dead clause, keeping the true ci.yml sentence and the section heading.
+fn strip_rust_release_docs(contributing: &str) -> String {
+    let trimmed = remove_markdown_section(
+        &remove_markdown_section(contributing, "## Release process"),
+        "### Required repository secrets",
+    );
+    trimmed.replace(
+        " and automated releases (`.github/workflows/release.yml`)",
+        "",
+    )
 }
 
 #[allow(dead_code)]
@@ -2029,9 +2047,28 @@ jobs:
     /// section, preceded by a blank line.
     const FIXTURE_README_LICENSE: &str = "# {{name}}\n\n{{description}}\n\n## Getting started\n\nRun `cargo run`.\n\n## License\n\nThis project is licensed under the MIT License — see LICENSE for details.\n";
 
-    /// Mirrors the real rust CONTRIBUTING: `## Release process` is a middle
-    /// section ending at `## Code style`.
-    const FIXTURE_CONTRIBUTING_RELEASE: &str = "# Contributing to {{name}}\n\n## Development workflow\n\nFork, branch, PR.\n\n## Release process\n\nReleases are automated via the `release.yml` workflow.\n\n## Code style\n\nRun `cargo fmt`.\n";
+    /// Mirrors the real rust CONTRIBUTING outside the `{{...}}` placeholders:
+    /// the crate-publish story in `## Release process`, again in the CI
+    /// paragraph, and the `CARGO_REGISTRY_TOKEN` story in `### Required
+    /// repository secrets` — all of which stop being true without a license.
+    const FIXTURE_CONTRIBUTING_RELEASE: &str = concat!(
+        "# Contributing to {{name}}\n\nThank you for your interest in contributing!\n",
+        "\n## Development workflow\n\nFork, branch, PR.\n",
+        "\n## CI/CD and required secrets\n",
+        "\nThis project uses GitHub Actions for CI (`.github/workflows/ci.yml`)",
+        " and automated releases (`.github/workflows/release.yml`).\n",
+        "\n### Required repository secrets\n",
+        "\n| Secret | Description | Where to get it |\n|---|---|---|\n",
+        "| `CARGO_REGISTRY_TOKEN` | API token to publish crates to [crates.io](https://crates.io)",
+        " | [crates.io/me](https://crates.io/me) → API Tokens → New Token |\n",
+        "\n> **Tip:** If you use [ghscaff](https://github.com/UniverLab/ghscaff), you can run",
+        " `ghscaff apply` to configure missing secrets interactively, or set the env var",
+        " before running:\n> ```bash\n> export CARGO_REGISTRY_TOKEN=<your_token>\n",
+        "> ghscaff apply\n> ```\n",
+        "\n## Release process\n\nReleases are automated via the `release.yml` workflow.\n",
+        "\nThe workflow builds binaries and publishes to crates.io.\n",
+        "\n## Code style\n\nRun `cargo fmt`.\n"
+    );
 
     #[test]
     fn remove_markdown_section_removes_middle_section() {
@@ -2097,11 +2134,20 @@ jobs:
         let contributing = find(&files, "CONTRIBUTING.md");
         assert!(!contributing.contains("## Release process"));
         assert!(!contributing.contains("release.yml"));
+        assert!(!contributing.contains("automated releases"));
+        assert!(!contributing.contains("CARGO_REGISTRY_TOKEN"));
+        assert!(!contributing.contains("Required repository secrets"));
+        assert!(!contributing.contains("crates.io"));
         assert!(contributing.contains("## Development workflow"));
+        assert!(contributing.contains("## CI/CD and required secrets"));
+        assert!(contributing
+            .contains("This project uses GitHub Actions for CI (`.github/workflows/ci.yml`)."));
         assert!(contributing.contains("## Code style"));
-        // The blank line above the heading went with the section, so the next
-        // heading follows the previous body line directly.
-        assert!(contributing.contains("Fork, branch, PR.\n## Code style"));
+        assert!(contributing.contains("Fork, branch, PR."));
+        // The blank line above each removed heading went with the section, so
+        // what follows follows the preceding body line directly (spec rule).
+        assert!(contributing.contains("Fork, branch, PR.\n\n## CI/CD and required secrets"));
+        assert!(contributing.contains("ci.yml`).\n## Code style"));
     }
 
     #[test]
@@ -2114,7 +2160,24 @@ jobs:
         );
         assert_eq!(
             find(&files, "CONTRIBUTING.md"),
-            "# Contributing to myrepo\n\n## Development workflow\n\nFork, branch, PR.\n\n## Release process\n\nReleases are automated via the `release.yml` workflow.\n\n## Code style\n\nRun `cargo fmt`.\n"
+            concat!(
+                "# Contributing to myrepo\n\nThank you for your interest in contributing!\n",
+                "\n## Development workflow\n\nFork, branch, PR.\n",
+                "\n## CI/CD and required secrets\n",
+                "\nThis project uses GitHub Actions for CI (`.github/workflows/ci.yml`)",
+                " and automated releases (`.github/workflows/release.yml`).\n",
+                "\n### Required repository secrets\n",
+                "\n| Secret | Description | Where to get it |\n|---|---|---|\n",
+                "| `CARGO_REGISTRY_TOKEN` | API token to publish crates to [crates.io](https://crates.io)",
+                " | [crates.io/me](https://crates.io/me) → API Tokens → New Token |\n",
+                "\n> **Tip:** If you use [ghscaff](https://github.com/UniverLab/ghscaff), you can run",
+                " `ghscaff apply` to configure missing secrets interactively, or set the env var",
+                " before running:\n> ```bash\n> export CARGO_REGISTRY_TOKEN=<your_token>\n",
+                "> ghscaff apply\n> ```\n",
+                "\n## Release process\n\nReleases are automated via the `release.yml` workflow.\n",
+                "\nThe workflow builds binaries and publishes to crates.io.\n",
+                "\n## Code style\n\nRun `cargo fmt`.\n"
+            )
         );
     }
 
@@ -2189,6 +2252,13 @@ jobs:
         );
         if lang == "rust" {
             assert!(!contributing.contains("## Release process"));
+            // Nothing about the dropped publish flow may survive: no
+            // `release.yml` mention (the workflow does not exist), no
+            // `CARGO_REGISTRY_TOKEN` story, no "automated releases" claim —
+            // the CI paragraph keeps only its true ci.yml sentence.
+            assert!(!contributing.contains("release.yml"));
+            assert!(!contributing.contains("automated releases"));
+            assert!(!contributing.contains("CARGO_REGISTRY_TOKEN"));
             for heading in [
                 "## Development workflow",
                 "## CI/CD and required secrets",
@@ -2196,6 +2266,12 @@ jobs:
             ] {
                 assert!(contributing.contains(heading), "rust/None keeps {heading}");
             }
+            assert!(
+                contributing.contains(
+                    "This project uses GitHub Actions for CI (`.github/workflows/ci.yml`)."
+                ),
+                "rust/None CI paragraph must name only ci.yml"
+            );
         } else {
             // python keeps its publish.yml story, so the section stays.
             assert!(contributing.contains("## Release process"));
