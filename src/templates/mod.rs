@@ -8,6 +8,26 @@ use crate::github::client::GithubClient;
 
 const BOILERPLATE_REPO: &str = "UniverLab/ghscaff-boilerplate";
 
+/// SPDX identifier rendered by the `{{license}}` placeholder. The wizard
+/// stores the choice as a display string; `GPL-3.0` is not an SPDX id, so it
+/// maps to `GPL-3.0-only`. `None` (no license chosen) renders empty.
+fn license_spdx_id(license: Option<&str>) -> &str {
+    match license {
+        Some("GPL-3.0") => "GPL-3.0-only",
+        Some(other) => other,
+        None => "",
+    }
+}
+
+/// Printed once when the rust template is rendered with no license chosen.
+pub const NO_LICENSE_NOTICE: &str = "No license chosen: the crate is not publishable (publish = false) and no release workflow was created. Add a LICENSE and restore them to publish.";
+
+/// True only for the rust no-license case, so the notice is printed once and
+/// never for a python boilerplate or for a chosen license.
+pub fn is_rust_without_license(language: &str, license: Option<&str>) -> bool {
+    language == "rust" && license.is_none()
+}
+
 // Files excluded from boilerplate_files() — handled separately or metadata
 const SKIP_FILES: &[&str] = &[
     "template.toml",
@@ -60,7 +80,13 @@ pub fn assemble_gitignore(fetched: &str) -> String {
 
 pub trait LanguageTemplate {
     fn gitignore_name(&self) -> String;
-    fn boilerplate_files(&self, name: &str, description: &str, owner: &str) -> Vec<RepoFile>;
+    fn boilerplate_files(
+        &self,
+        name: &str,
+        description: &str,
+        owner: &str,
+        license: Option<&str>,
+    ) -> Vec<RepoFile>;
     #[allow(dead_code)]
     fn default_topics(&self) -> Vec<String>;
 }
@@ -81,12 +107,23 @@ impl RemoteTemplate {
         name: &str,
         description: &str,
         owner: &str,
+        license: &str,
     ) -> String {
         content
             .replace("{{name}}", name)
             .replace("{{description}}", description)
             .replace("{{github_org}}", owner)
             .replace("{{github_repo}}", name)
+            .replace("{{license}}", license)
+    }
+
+    /// The boilerplate language, taken from the cache directory name that
+    /// [`resolve`] created (`cache_dir()?.join(language)`).
+    fn language(&self) -> String {
+        self.cache_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 
     fn gitignore_from_toml(&self) -> String {
@@ -109,7 +146,15 @@ impl LanguageTemplate for RemoteTemplate {
         self.gitignore_from_toml()
     }
 
-    fn boilerplate_files(&self, name: &str, description: &str, owner: &str) -> Vec<RepoFile> {
+    fn boilerplate_files(
+        &self,
+        name: &str,
+        description: &str,
+        owner: &str,
+        license: Option<&str>,
+    ) -> Vec<RepoFile> {
+        let language = self.language();
+        let spdx = license_spdx_id(license);
         let mut files = vec![];
         for entry in walkdir::WalkDir::new(&self.cache_dir)
             .into_iter()
@@ -127,7 +172,10 @@ impl LanguageTemplate for RemoteTemplate {
             let Ok(raw) = std::fs::read_to_string(path) else {
                 continue;
             };
-            let content = self.apply_placeholders(&raw, name, description, owner);
+            let content = self.apply_placeholders(&raw, name, description, owner, spdx);
+            let Some(content) = adjust_for_no_license(&language, &rel, content, license) else {
+                continue;
+            };
             files.push(RepoFile { path: rel, content });
         }
         files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -206,6 +254,127 @@ fn download(language: &str, token: &str) -> Result<()> {
 fn cache_dir() -> Result<PathBuf> {
     let base = dirs::home_dir().context("Cannot resolve home directory")?;
     Ok(base.join(".ghscaff").join("boilerplate"))
+}
+
+/// Adjust one already-rendered file for the "no license chosen" case. `None`
+/// means the file must be omitted from the init commit; `Some(text)` is the
+/// rewritten content. A chosen license leaves every file untouched.
+///
+/// * rust — the crate cannot be published without a LICENSE, so drop the
+///   publish-only release workflow, stop referencing a LICENSE file, and pass
+///   `publish-check: false` to the shared rust-ci workflow.
+/// * python — drop the `license = …` line from `pyproject.toml`.
+fn adjust_for_no_license(
+    language: &str,
+    rel: &str,
+    content: String,
+    license: Option<&str>,
+) -> Option<String> {
+    if license.is_some() {
+        return Some(content);
+    }
+    if language == "rust" {
+        return match rel {
+            ".github/workflows/release.yml" => None,
+            "Cargo.toml" => Some(disable_rust_publish(&content)),
+            ".github/workflows/ci.yml" => Some(add_publish_check_false(&content)),
+            _ => Some(content),
+        };
+    }
+    if language.starts_with("python") && rel == "pyproject.toml" {
+        return Some(strip_python_license(&content));
+    }
+    Some(content)
+}
+
+/// `license-file = "LICENSE"` would make cargo look for a file that is not
+/// created; `publish = false` is the correct marker for an unpublished crate.
+fn disable_rust_publish(cargo_toml: &str) -> String {
+    cargo_toml.replace("license-file = \"LICENSE\"", "publish = false")
+}
+
+/// Remove the `license = …` line from a pyproject.toml. `license-files` is a
+/// different key and is left untouched.
+fn strip_python_license(pyproject: &str) -> String {
+    let kept: Vec<String> = pyproject
+        .lines()
+        .filter(|line| !is_python_license_line(line))
+        .map(str::to_string)
+        .collect();
+    join_lines(kept, pyproject.ends_with('\n'))
+}
+
+fn is_python_license_line(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("license =") || t.starts_with("license=")
+}
+
+/// Add `publish-check: false` to the `rust-ci` job. If the job already has a
+/// `with:` block the flag goes under it; otherwise a `with:` block is inserted
+/// right after the job's `uses:` line. An existing `publish-check` is left
+/// alone. Insertion is scoped to the `rust-ci` job so a later job is never
+/// modified, and the file's trailing newline is preserved.
+fn add_publish_check_false(ci_yml: &str) -> String {
+    let trailing = ci_yml.ends_with('\n');
+    let mut lines: Vec<String> = ci_yml.lines().map(str::to_string).collect();
+    let Some(job) = lines.iter().position(|l| l.trim() == "rust-ci:") else {
+        return ci_yml.to_string();
+    };
+    let job_indent = indent_of(&lines[job]);
+    let end = job_block_end(&lines, job, job_indent);
+    if has_publish_check(&lines[job..end]) {
+        return ci_yml.to_string();
+    }
+    insert_publish_check(&mut lines, job, end, job_indent);
+    join_lines(lines, trailing)
+}
+
+fn has_publish_check(job_block: &[String]) -> bool {
+    job_block
+        .iter()
+        .any(|l| l.trim_start().starts_with("publish-check:"))
+}
+
+fn insert_publish_check(lines: &mut Vec<String>, job: usize, end: usize, job_indent: usize) {
+    let child = " ".repeat(job_indent + 2);
+    let leaf = " ".repeat(job_indent + 4);
+    let flag = format!("{leaf}publish-check: false");
+    let with_line = format!("{child}with:");
+    match (job..end).find(|&i| lines[i] == with_line) {
+        Some(i) => lines.insert(i + 1, flag),
+        None => {
+            let anchor = (job..end)
+                .find(|&i| lines[i].trim_start().starts_with("uses:"))
+                .unwrap_or(job);
+            lines.insert(anchor + 1, flag);
+            lines.insert(anchor + 1, with_line);
+        }
+    }
+}
+
+/// Index one past the last line of the job starting at `job`: the next
+/// non-blank line indented at or below the job's own indent, or end of file.
+fn job_block_end(lines: &[String], job: usize, job_indent: usize) -> usize {
+    (job + 1..lines.len())
+        .find(|&i| {
+            let t = lines[i].trim_start();
+            !t.is_empty() && indent_of(&lines[i]) <= job_indent
+        })
+        .unwrap_or(lines.len())
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// `str::lines()` drops the final newline, so it is re-added when the source
+/// had one — otherwise the rewritten file would lose it.
+fn join_lines(lines: Vec<String>, trailing_newline: bool) -> String {
+    let mut out = lines.join("\n");
+    if trailing_newline {
+        out.push('\n');
+    }
+    out
 }
 
 #[allow(dead_code)]
@@ -342,7 +511,7 @@ mod tests {
     #[test]
     fn test_resolve_rust_template_embedded() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg", Some("MIT"));
         assert!(!files.is_empty());
     }
 
@@ -498,7 +667,7 @@ mod tests {
     #[test]
     fn test_resolve_rust_template_files_content() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg", Some("MIT"));
         let names: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert!(names.contains(&"Cargo.toml"));
         assert!(names.contains(&"src/main.rs"));
@@ -520,6 +689,7 @@ mod tests {
             "myapp",
             "My App",
             "myorg",
+            "",
         );
         assert_eq!(result, "Hello myapp, welcome to My App by myorg/myapp");
     }
@@ -529,7 +699,7 @@ mod tests {
         let tmpl = RemoteTemplate {
             cache_dir: tempfile::tempdir().unwrap().keep(),
         };
-        let result = tmpl.apply_placeholders("plain text", "a", "b", "c");
+        let result = tmpl.apply_placeholders("plain text", "a", "b", "c", "");
         assert_eq!(result, "plain text");
     }
 
@@ -538,7 +708,7 @@ mod tests {
         let tmpl = RemoteTemplate {
             cache_dir: tempfile::tempdir().unwrap().keep(),
         };
-        let result = tmpl.apply_placeholders("{{name}} and {{name}}", "x", "y", "z");
+        let result = tmpl.apply_placeholders("{{name}} and {{name}}", "x", "y", "z", "");
         assert_eq!(result, "x and x");
     }
 
@@ -598,7 +768,7 @@ mod tests {
         std::fs::write(cache.join("PLACEHOLDERS.md"), "docs").unwrap();
 
         let tmpl = RemoteTemplate { cache_dir: cache };
-        let files = tmpl.boilerplate_files("myrepo", "My description", "myorg");
+        let files = tmpl.boilerplate_files("myrepo", "My description", "myorg", Some("MIT"));
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"Cargo.toml"));
         assert!(paths.contains(&"README.md"));
@@ -615,7 +785,7 @@ mod tests {
         let cache = dir.path().join("empty");
         std::fs::create_dir_all(&cache).unwrap();
         let tmpl = RemoteTemplate { cache_dir: cache };
-        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let files = tmpl.boilerplate_files("repo", "desc", "owner", Some("MIT"));
         assert!(files.is_empty());
     }
 
@@ -629,7 +799,7 @@ mod tests {
         std::fs::write(src_dir.join("main.rs"), "fn main() {}\n").unwrap();
 
         let tmpl = RemoteTemplate { cache_dir: cache };
-        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let files = tmpl.boilerplate_files("repo", "desc", "owner", Some("MIT"));
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"Cargo.toml"));
         assert!(paths.contains(&"src/main.rs"));
@@ -773,7 +943,7 @@ required = false
         std::fs::write(cache.join("binary.bin"), [0xFF, 0xFE, 0xFD]).unwrap();
 
         let tmpl = RemoteTemplate { cache_dir: cache };
-        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let files = tmpl.boilerplate_files("repo", "desc", "owner", Some("MIT"));
         // Only text.txt should be included; binary.bin skipped
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "text.txt");
@@ -836,6 +1006,7 @@ required = false
             "repo",
             "desc",
             "myorg",
+            "",
         );
         assert_eq!(result, "org=myorg repo=repo");
     }
@@ -845,7 +1016,7 @@ required = false
         let tmpl = RemoteTemplate {
             cache_dir: tempfile::tempdir().unwrap().keep(),
         };
-        let result = tmpl.apply_placeholders("{{name}}", "", "", "");
+        let result = tmpl.apply_placeholders("{{name}}", "", "", "", "");
         assert_eq!(result, "");
     }
 
@@ -854,7 +1025,7 @@ required = false
         let tmpl = RemoteTemplate {
             cache_dir: tempfile::tempdir().unwrap().keep(),
         };
-        let result = tmpl.apply_placeholders("{{name}}", "my\"app", "desc", "owner");
+        let result = tmpl.apply_placeholders("{{name}}", "my\"app", "desc", "owner", "");
         assert_eq!(result, "my\"app");
     }
 
@@ -892,7 +1063,7 @@ required = false
         std::fs::write(cache.join("file.txt"), "original content {{name}}").unwrap();
 
         let tmpl = RemoteTemplate { cache_dir: cache };
-        let files = tmpl.boilerplate_files("replaced", "", "");
+        let files = tmpl.boilerplate_files("replaced", "", "", Some("MIT"));
         assert_eq!(files[0].content, "original content replaced");
     }
 
@@ -923,7 +1094,7 @@ required = false
     #[test]
     fn test_rust_template_files_sorted() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("app", "desc", "owner");
+        let files = tmpl.boilerplate_files("app", "desc", "owner", Some("MIT"));
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         // RustTemplate returns files in a specific order, not necessarily alphabetical
         assert_eq!(paths.len(), 3);
@@ -942,7 +1113,7 @@ required = false
         std::fs::write(cache.join("m_middle.txt"), "m").unwrap();
 
         let tmpl = RemoteTemplate { cache_dir: cache };
-        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let files = tmpl.boilerplate_files("repo", "desc", "owner", Some("MIT"));
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         let mut sorted = paths.clone();
         sorted.sort();
@@ -1027,7 +1198,7 @@ required = false
         std::fs::write(benches.join("bench.rs"), "#[bench] fn b() {}").unwrap();
 
         let tmpl = RemoteTemplate { cache_dir: cache };
-        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let files = tmpl.boilerplate_files("repo", "desc", "owner", Some("MIT"));
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"Cargo.toml"));
         assert!(paths.contains(&"src/lib.rs"));
@@ -1107,6 +1278,7 @@ required = false
             "n",
             "d",
             "o",
+            "",
         );
         assert_eq!(result, "n/d/o/n");
     }
@@ -1116,7 +1288,7 @@ required = false
         let tmpl = RemoteTemplate {
             cache_dir: tempfile::tempdir().unwrap().keep(),
         };
-        let result = tmpl.apply_placeholders("{{name}}{{description}}", "a", "b", "c");
+        let result = tmpl.apply_placeholders("{{name}}{{description}}", "a", "b", "c", "");
         assert_eq!(result, "ab");
     }
 
@@ -1125,7 +1297,7 @@ required = false
         let tmpl = RemoteTemplate {
             cache_dir: tempfile::tempdir().unwrap().keep(),
         };
-        let result = tmpl.apply_placeholders("{{name}}ly is {{name}}s", "x", "y", "z");
+        let result = tmpl.apply_placeholders("{{name}}ly is {{name}}s", "x", "y", "z", "");
         assert_eq!(result, "xly is xs");
     }
 
@@ -1172,7 +1344,7 @@ required = false
         std::fs::write(cache.join(".hidden"), "secret").unwrap();
         std::fs::write(cache.join("visible.txt"), "content").unwrap();
         let tmpl = RemoteTemplate { cache_dir: cache };
-        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let files = tmpl.boilerplate_files("repo", "desc", "owner", Some("MIT"));
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"visible.txt"));
     }
@@ -1182,7 +1354,7 @@ required = false
         let tmpl = RemoteTemplate {
             cache_dir: tempfile::tempdir().unwrap().keep(),
         };
-        let result = tmpl.apply_placeholders("{{name}}{{name}}{{name}}", "X", "", "");
+        let result = tmpl.apply_placeholders("{{name}}{{name}}{{name}}", "X", "", "", "");
         assert_eq!(result, "XXX");
     }
 
@@ -1233,10 +1405,446 @@ required = false
         std::fs::write(a_dir.join("a.txt"), "a").unwrap();
         std::fs::write(b_dir.join("b.txt"), "b").unwrap();
         let tmpl = RemoteTemplate { cache_dir: cache };
-        let files = tmpl.boilerplate_files("repo", "desc", "owner");
+        let files = tmpl.boilerplate_files("repo", "desc", "owner", Some("MIT"));
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         let mut sorted = paths.clone();
         sorted.sort();
         assert_eq!(paths, sorted);
+    }
+
+    // ── license choice: SPDX mapping, notice gate, no-license transforms ──
+
+    /// The rust boilerplate as it exists upstream (`license-file = "LICENSE"`
+    /// and a publish-only release workflow).
+    const FIXTURE_CARGO_TOML: &str = r#"[package]
+name = "{{name}}"
+version = "0.1.0"
+edition = "2021"
+description = "{{description}}"
+license-file = "LICENSE"
+repository = "https://github.com/{{github_org}}/{{github_repo}}"
+readme = "README.md"
+
+[dependencies]
+"#;
+
+    const FIXTURE_CI_YML: &str = r#"name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rust-ci:
+    uses: UniverLab/workflows/.github/workflows/rust-ci.yml@main
+"#;
+
+    const FIXTURE_RELEASE_YML: &str = r#"name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    uses: UniverLab/workflows/.github/workflows/rust-release.yml@main
+"#;
+
+    /// Build a throwaway boilerplate cache whose directory is named after the
+    /// language (that name is how `RemoteTemplate::language()` reads it) and
+    /// return it with the `TempDir` that owns it.
+    fn fixture(language: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, RemoteTemplate) {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join(language);
+        std::fs::create_dir_all(&cache).unwrap();
+        for (rel, content) in files {
+            let target = cache.join(rel);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, content).unwrap();
+        }
+        let tmpl = RemoteTemplate { cache_dir: cache };
+        (dir, tmpl)
+    }
+
+    fn rust_fixture() -> (tempfile::TempDir, RemoteTemplate) {
+        fixture(
+            "rust",
+            &[
+                ("Cargo.toml", FIXTURE_CARGO_TOML),
+                (".github/workflows/ci.yml", FIXTURE_CI_YML),
+                (".github/workflows/release.yml", FIXTURE_RELEASE_YML),
+                ("src/main.rs", "fn main() {}\n"),
+                ("README.md", "# {{name}}\n\n{{description}}\n"),
+            ],
+        )
+    }
+
+    fn find<'a>(files: &'a [RepoFile], path: &str) -> &'a str {
+        files
+            .iter()
+            .find(|f| f.path == path)
+            .map(|f| f.content.as_str())
+            .unwrap_or_else(|| panic!("{path} missing from rendered files"))
+    }
+
+    #[test]
+    fn license_spdx_id_maps_wizard_choices() {
+        assert_eq!(license_spdx_id(None), "");
+        assert_eq!(license_spdx_id(Some("MIT")), "MIT");
+        assert_eq!(license_spdx_id(Some("Apache-2.0")), "Apache-2.0");
+        assert_eq!(license_spdx_id(Some("GPL-3.0")), "GPL-3.0-only");
+    }
+
+    #[test]
+    fn is_rust_without_license_truth_table() {
+        assert!(is_rust_without_license("rust", None));
+        assert!(!is_rust_without_license("rust", Some("MIT")));
+        assert!(!is_rust_without_license("python-module", None));
+        assert!(!is_rust_without_license("go", Some("MIT")));
+    }
+
+    #[test]
+    fn no_license_notice_is_the_documented_text() {
+        assert_eq!(
+            NO_LICENSE_NOTICE,
+            "No license chosen: the crate is not publishable (publish = false) and no release workflow was created. Add a LICENSE and restore them to publish."
+        );
+    }
+
+    #[test]
+    fn disable_rust_publish_replaces_license_file() {
+        let out = disable_rust_publish(FIXTURE_CARGO_TOML);
+        assert!(out.contains("publish = false"));
+        assert!(!out.contains("license-file"));
+        assert!(out.contains("name = \"{{name}}\""));
+        assert!(out.ends_with("[dependencies]\n"));
+    }
+
+    #[test]
+    fn strip_python_license_removes_license_line() {
+        let input = "[project]\nname = \"demo\"\nlicense = \"MIT\"\nlicense-files = [\"LICENSE\"]\nversion = \"1\"\n";
+        let out = strip_python_license(input);
+        assert!(!out.contains("license ="));
+        assert!(!out.contains("license=\""));
+        assert!(out.contains("license-files = [\"LICENSE\"]"));
+        assert_eq!(
+            out,
+            "[project]\nname = \"demo\"\nlicense-files = [\"LICENSE\"]\nversion = \"1\"\n"
+        );
+    }
+
+    #[test]
+    fn strip_python_license_handles_compact_and_trailing_newline() {
+        let out = strip_python_license("[project]\nlicense=\"MIT\"\nname = \"demo\"");
+        assert_eq!(out, "[project]\nname = \"demo\"");
+    }
+
+    #[test]
+    fn add_publish_check_false_inserts_with_block() {
+        let out = add_publish_check_false(FIXTURE_CI_YML);
+        assert!(out.contains("    with:\n      publish-check: false"));
+        assert!(out.ends_with("publish-check: false\n"));
+        assert!(!out.contains("with:\n    with:"));
+    }
+
+    #[test]
+    fn add_publish_check_false_uses_existing_with_block() {
+        let input = "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n    with:\n      args: --all\n";
+        let out = add_publish_check_false(input);
+        assert_eq!(
+            out,
+            "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n    with:\n      publish-check: false\n      args: --all\n"
+        );
+    }
+
+    #[test]
+    fn add_publish_check_false_keeps_existing_publish_check() {
+        let input =
+            "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n    with:\n      publish-check: true\n";
+        assert_eq!(add_publish_check_false(input), input);
+    }
+
+    #[test]
+    fn add_publish_check_false_without_rust_ci_is_unchanged() {
+        let input = "jobs:\n  python-ci:\n    uses: org/ci.yml@main\n";
+        assert_eq!(add_publish_check_false(input), input);
+    }
+
+    #[test]
+    fn add_publish_check_false_stops_at_next_job() {
+        let input = "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n  other:\n    uses: org/other.yml@main\n";
+        let out = add_publish_check_false(input);
+        assert_eq!(
+            out,
+            "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n    with:\n      publish-check: false\n  other:\n    uses: org/other.yml@main\n"
+        );
+    }
+
+    #[test]
+    fn adjust_for_no_license_routing() {
+        let cargo = adjust_for_no_license("rust", "Cargo.toml", FIXTURE_CARGO_TOML.into(), None)
+            .expect("Cargo.toml is kept");
+        assert!(cargo.contains("publish = false"));
+        assert!(adjust_for_no_license(
+            "rust",
+            ".github/workflows/release.yml",
+            "jobs:".into(),
+            None
+        )
+        .is_none());
+        assert_eq!(
+            adjust_for_no_license("rust", "src/main.rs", "fn main() {}".into(), None).as_deref(),
+            Some("fn main() {}")
+        );
+        for lang in ["python-module", "python-fastapi"] {
+            let out = adjust_for_no_license(
+                lang,
+                "pyproject.toml",
+                "[project]\nlicense = \"MIT\"\n".into(),
+                None,
+            )
+            .expect("pyproject.toml is kept");
+            assert_eq!(out, "[project]\n");
+        }
+        assert_eq!(
+            adjust_for_no_license("go", "go.mod", "module x\n".into(), None).as_deref(),
+            Some("module x\n")
+        );
+    }
+
+    #[test]
+    fn adjust_for_no_license_with_chosen_license_is_identity() {
+        assert_eq!(
+            adjust_for_no_license("rust", "Cargo.toml", FIXTURE_CARGO_TOML.into(), Some("MIT"))
+                .as_deref(),
+            Some(FIXTURE_CARGO_TOML)
+        );
+        assert_eq!(
+            adjust_for_no_license(
+                "rust",
+                ".github/workflows/release.yml",
+                "jobs:\n".into(),
+                Some("MIT")
+            )
+            .as_deref(),
+            Some("jobs:\n")
+        );
+    }
+
+    #[test]
+    fn remote_template_apply_placeholders_replaces_license() {
+        let (_dir, tmpl) = fixture("rust", &[]);
+        assert_eq!(
+            tmpl.apply_placeholders("license = \"{{license}}\"", "n", "d", "o", "MIT"),
+            "license = \"MIT\""
+        );
+        assert_eq!(
+            tmpl.apply_placeholders("license = \"{{license}}\"", "n", "d", "o", ""),
+            "license = \"\""
+        );
+    }
+
+    #[test]
+    fn render_rust_fixture_with_mit_keeps_publish_files() {
+        let (_dir, tmpl) = rust_fixture();
+        let files = tmpl.boilerplate_files("myrepo", "My description", "myorg", Some("MIT"));
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&".github/workflows/release.yml"));
+
+        let cargo = find(&files, "Cargo.toml");
+        assert!(cargo.contains("license-file = \"LICENSE\""));
+        assert!(!cargo.contains("publish = false"));
+        assert!(cargo.contains("name = \"myrepo\""));
+        assert!(cargo.contains("https://github.com/myorg/myrepo"));
+
+        let ci = find(&files, ".github/workflows/ci.yml");
+        assert!(!ci.contains("publish-check"));
+        assert_eq!(ci, FIXTURE_CI_YML);
+    }
+
+    #[test]
+    fn render_rust_fixture_without_license_disables_publish() {
+        let (_dir, tmpl) = rust_fixture();
+        let files = tmpl.boilerplate_files("myrepo", "My description", "myorg", None);
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(!paths.contains(&".github/workflows/release.yml"));
+
+        let cargo = find(&files, "Cargo.toml");
+        assert!(cargo.contains("publish = false"));
+        assert!(!cargo.contains("license-file"));
+
+        assert!(find(&files, ".github/workflows/ci.yml")
+            .contains("    with:\n      publish-check: false"));
+        assert_eq!(find(&files, "README.md"), "# myrepo\n\nMy description\n");
+        assert_eq!(find(&files, "src/main.rs"), "fn main() {}\n");
+    }
+
+    #[test]
+    fn render_python_fixture_substitutes_license_placeholder() {
+        let (_dir, tmpl) = fixture(
+            "python-module",
+            &[(
+                "pyproject.toml",
+                "[project]\nname = \"{{name}}\"\nlicense = \"{{license}}\"\n",
+            )],
+        );
+        let files = tmpl.boilerplate_files("demo", "d", "org", Some("Apache-2.0"));
+        assert_eq!(
+            find(&files, "pyproject.toml"),
+            "[project]\nname = \"demo\"\nlicense = \"Apache-2.0\"\n"
+        );
+    }
+
+    #[test]
+    fn render_python_fixture_without_license_has_no_license_line() {
+        let (_dir, tmpl) = fixture(
+            "python-module",
+            &[(
+                "pyproject.toml",
+                "[project]\nname = \"{{name}}\"\nlicense = \"{{license}}\"\n",
+            )],
+        );
+        let files = tmpl.boilerplate_files("demo", "d", "org", None);
+        assert_eq!(
+            find(&files, "pyproject.toml"),
+            "[project]\nname = \"demo\"\n"
+        );
+        assert!(!find(&files, "pyproject.toml")
+            .lines()
+            .any(|l| l.starts_with("license")));
+    }
+
+    #[test]
+    fn render_python_current_boilerplate_keeps_hardcoded_mit() {
+        let (_dir, tmpl) = fixture(
+            "python-module",
+            &[(
+                "pyproject.toml",
+                "[project]\nname = \"{{name}}\"\nlicense = \"MIT\"\n",
+            )],
+        );
+        let files = tmpl.boilerplate_files("demo", "d", "org", Some("Apache-2.0"));
+        assert_eq!(
+            find(&files, "pyproject.toml"),
+            "[project]\nname = \"demo\"\nlicense = \"MIT\"\n"
+        );
+    }
+
+    #[test]
+    fn render_python_fastapi_fixture_strips_license() {
+        let (_dir, tmpl) = fixture(
+            "python-fastapi",
+            &[(
+                "pyproject.toml",
+                "[project]\nlicense = \"{{license}}\"\nversion = \"0.1.0\"\n",
+            )],
+        );
+        let files = tmpl.boilerplate_files("api", "d", "org", None);
+        assert_eq!(
+            find(&files, "pyproject.toml"),
+            "[project]\nversion = \"0.1.0\"\n"
+        );
+    }
+
+    /// FR5 evidence — prints the rendered file list and the license-relevant
+    /// lines for MIT and for no license, from throwaway fixtures only. No
+    /// repository is created and no network call is made.
+    #[test]
+    fn evidence_license_rendering_rust_and_python() {
+        let (_d1, rust) = rust_fixture();
+        let (_d2, python) = fixture(
+            "python-module",
+            &[(
+                "pyproject.toml",
+                "[project]\nname = \"{{name}}\"\nlicense = \"{{license}}\"\n",
+            )],
+        );
+
+        let mit = rust.boilerplate_files("demo", "A demo", "univerlab", Some("MIT"));
+        println!(
+            "[evidence] rust/MIT  files: {}",
+            mit.iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        println!(
+            "[evidence] rust/MIT  Cargo.toml: {}",
+            find(&mit, "Cargo.toml")
+                .lines()
+                .find(|l| l.starts_with("license") || l.starts_with("publish"))
+                .unwrap_or("<none>")
+        );
+        println!(
+            "[evidence] rust/MIT  ci.yml: {}; release.yml: present",
+            if find(&mit, ".github/workflows/ci.yml").contains("publish-check") {
+                "publish-check present"
+            } else {
+                "no publish-check"
+            }
+        );
+
+        let none = rust.boilerplate_files("demo", "A demo", "univerlab", None);
+        println!(
+            "[evidence] rust/None files: {}",
+            none.iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        println!(
+            "[evidence] rust/None Cargo.toml: {}",
+            find(&none, "Cargo.toml")
+                .lines()
+                .find(|l| l.starts_with("license") || l.starts_with("publish"))
+                .unwrap_or("<none>")
+        );
+        println!(
+            "[evidence] rust/None ci.yml: {}",
+            find(&none, ".github/workflows/ci.yml")
+                .lines()
+                .filter(|l| l.trim() == "with:" || l.contains("publish-check"))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        );
+        println!(
+            "[evidence] rust/None release.yml: {}",
+            if none
+                .iter()
+                .any(|f| f.path == ".github/workflows/release.yml")
+            {
+                "present"
+            } else {
+                "absent"
+            }
+        );
+
+        for license in [Some("Apache-2.0"), None] {
+            let label = license.unwrap_or("None");
+            let files = python.boilerplate_files("demo", "A demo", "univerlab", license);
+            println!(
+                "[evidence] python/{label} pyproject.toml: {}",
+                find(&files, "pyproject.toml")
+                    .lines()
+                    .find(|l| l.starts_with("license"))
+                    .unwrap_or("no license line")
+            );
+        }
+
+        // The printed lines above are also asserted, so the evidence cannot
+        // drift from behaviour.
+        assert!(mit
+            .iter()
+            .any(|f| f.path == ".github/workflows/release.yml"));
+        assert!(find(&mit, "Cargo.toml").contains("license-file = \"LICENSE\""));
+        assert!(!find(&mit, ".github/workflows/ci.yml").contains("publish-check"));
+        assert!(!none
+            .iter()
+            .any(|f| f.path == ".github/workflows/release.yml"));
+        assert!(find(&none, "Cargo.toml").contains("publish = false"));
+        assert!(!find(&none, "Cargo.toml").contains("license-file"));
+        assert!(find(&none, ".github/workflows/ci.yml")
+            .contains("    with:\n      publish-check: false"));
     }
 }

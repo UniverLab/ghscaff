@@ -92,7 +92,7 @@ fn build_wizard_init_files(
     let mut init_files: Vec<contents::TreeFile> = vec![];
 
     if let Some(tmpl) = template {
-        for f in tmpl.boilerplate_files(&c.name, &c.description, &c.owner) {
+        for f in tmpl.boilerplate_files(&c.name, &c.description, &c.owner, c.license.as_deref()) {
             init_files.push(contents::TreeFile {
                 path: f.path,
                 content: f.content,
@@ -127,6 +127,20 @@ fn build_wizard_init_files(
     }
 
     Ok(init_files)
+}
+
+/// Print the no-license notice once when the rust template was rendered
+/// without a license, so the user knows why the crate is not publishable.
+/// Returns whether the notice was printed.
+fn warn_if_rust_without_license(c: &WizardConfig) -> bool {
+    let warned = c
+        .language
+        .as_deref()
+        .is_some_and(|lang| templates::is_rust_without_license(lang, c.license.as_deref()));
+    if warned {
+        println!("  {}", templates::NO_LICENSE_NOTICE);
+    }
+    warned
 }
 
 /// Step 1 — create the repo (empty; the initial commit follows via the Trees API).
@@ -369,6 +383,7 @@ pub(super) fn execute(
 
     // 2. Collect all boilerplate files for a single init commit
     let init_files = build_wizard_init_files(client, c, plan.template.as_deref())?;
+    warn_if_rust_without_license(c);
 
     // 3. Single init commit with all files (skip if empty repo with no LICENSE)
     let mut init_sha = String::new();

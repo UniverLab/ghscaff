@@ -614,6 +614,33 @@ fn execute_runs_end_to_end_against_mock() {
     ));
 }
 
+// ── warn_if_rust_without_license ───────────────────────────────────
+
+fn config_with(language: Option<&str>, license: Option<&str>) -> WizardConfig {
+    WizardConfig {
+        language: language.map(str::to_string),
+        license: license.map(str::to_string),
+        ..minimal_config()
+    }
+}
+
+#[test]
+fn warn_if_rust_without_license_only_for_rust_without_license() {
+    assert!(warn_if_rust_without_license(&config_with(
+        Some("rust"),
+        None
+    )));
+    assert!(!warn_if_rust_without_license(&config_with(
+        Some("rust"),
+        Some("MIT")
+    )));
+    assert!(!warn_if_rust_without_license(&config_with(
+        Some("python-module"),
+        None
+    )));
+    assert!(!warn_if_rust_without_license(&config_with(None, None)));
+}
+
 // ── followups_enabled ─────────────────────────────────────────────
 
 #[test]
