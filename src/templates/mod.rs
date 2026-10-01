@@ -1621,6 +1621,44 @@ jobs:
         );
     }
 
+    /// A blank line INSIDE the `rust-ci` job does not end it: the `with:` block
+    /// below the blank line still belongs to the job and its stale
+    /// `publish-check: true` must be rewritten, not duplicated.
+    #[test]
+    fn add_publish_check_false_reaches_past_an_inner_blank_line() {
+        let input = "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n\n    with:\n      publish-check: true\n  other:\n    uses: org/other.yml@main\n";
+        assert_eq!(
+            add_publish_check_false(input),
+            "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n\n    with:\n      publish-check: false\n  other:\n    uses: org/other.yml@main\n"
+        );
+    }
+
+    /// The inserted `with:` key sits `job_indent + 2` under the job key, so a
+    /// job indented deeper than the usual two spaces still yields valid YAML.
+    #[test]
+    fn add_publish_check_false_indents_insertion_under_a_deep_job() {
+        let input = "name: CI\non: push\njobs:\n    rust-ci:\n      uses: org/ci.yml@main\n";
+        assert_eq!(
+            add_publish_check_false(input),
+            "name: CI\non: push\njobs:\n    rust-ci:\n      uses: org/ci.yml@main\n      with:\n        publish-check: false\n"
+        );
+    }
+
+    /// Only `pyproject.toml` of a python project loses its license line: a
+    /// python project's other files and a non-python project's pyproject.toml
+    /// are left untouched (`&&`, not `||`).
+    #[test]
+    fn adjust_for_no_license_touches_only_python_pyproject_files() {
+        let body = "name = \"demo\"\nlicense = \"MIT\"\n";
+        for (lang, rel) in [("python-module", "main.py"), ("go", "pyproject.toml")] {
+            assert_eq!(
+                adjust_for_no_license(lang, rel, body.to_string(), None).as_deref(),
+                Some(body),
+                "{lang}/{rel} must keep its license line untouched"
+            );
+        }
+    }
+
     #[test]
     fn adjust_for_no_license_routing() {
         let cargo = adjust_for_no_license("rust", "Cargo.toml", FIXTURE_CARGO_TOML.into(), None)

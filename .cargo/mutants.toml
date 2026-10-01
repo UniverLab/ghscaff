@@ -13,4 +13,8 @@ exclude_re = [
   "impl ReleaseFetcher for RealFetcher",
   # updater::<impl BinaryDownloader for RealDownloader>::download — real HTTP download.
   "impl BinaryDownloader for RealDownloader",
+  # src/templates/agent_registry.rs::<impl RegistryFetcher for HttpFetcher>::get — real HTTP registry fetch; #[cfg(not(test))], so no test binary ever contains it.
+  "impl RegistryFetcher for HttpFetcher",
+  # src/templates/agentic.rs::resolved_platforms — production network resolution (cache path + resolve(&HttpFetcher)); #[cfg(not(test))], so no test binary ever contains it.
+  "replace resolved_platforms -> Vec<Platform>",
 ]

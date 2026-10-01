@@ -370,6 +370,34 @@ mod tests {
         );
     }
 
+    /// The test above tolerates a `None` cache dir; this one does not: whenever
+    /// the OS reports a cache dir, `cache_path` must derive the file from it
+    /// instead of collapsing to `None` (which would disable the cache entirely).
+    #[test]
+    fn cache_path_derives_from_the_os_cache_dir_when_one_exists() {
+        let Some(base) = dirs::cache_dir() else {
+            // No cache dir in this environment; nothing to derive from.
+            return;
+        };
+        let path =
+            cache_path().expect("cache_path must be Some whenever the OS reports a cache dir");
+        assert_eq!(path, base.join("ghscaff").join(CACHE_NAME));
+    }
+
+    /// The fallback notice embeds one line, so the reason must be the first
+    /// line of the formatted chain — neither a constant nor empty.
+    #[test]
+    fn short_reason_is_the_first_line_of_the_formatted_chain() {
+        assert_eq!(
+            short_reason(&anyhow::Error::msg("first line\nsecond line")),
+            "first line"
+        );
+        let chained: anyhow::Error = Err::<(), _>(anyhow::anyhow!("boom"))
+            .context("outer")
+            .unwrap_err();
+        assert_eq!(short_reason(&chained), "outer: boom");
+    }
+
     /// Every cache-freshness test compares `now_epoch()` against itself, so
     /// all of them keep passing if the clock helper collapses to a constant.
     /// This pins it to the real wall clock the TTL is measured against.
