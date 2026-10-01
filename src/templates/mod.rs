@@ -1,3 +1,5 @@
+mod agent_registry;
+mod agentic;
 pub mod rust;
 
 use anyhow::{Context, Result};
@@ -36,35 +38,10 @@ const SKIP_FILES: &[&str] = &[
     ".gitignore", // replaced by GitHub's official gitignore template via API
 ];
 
-// Comment marking the boundary between the fetched GitHub template and the
-// block below, so a reader of the assembled .gitignore can see where the
-// official template ends.
-const AGENTIC_GITIGNORE_HEADER: &str =
-    "# AI coding agents — mirrors gitkit's `agentic` builtin (src/ignore/mod.rs)\n";
-
-// Patterns for AI coding agent scratch state, appended to every scaffolded
-// repository's .gitignore regardless of language. Kept textually identical
-// to gitkit's `AGENTIC` constant in `src/ignore/mod.rs` (the `builtins`
-// module) — update both together.
-const AGENTIC_GITIGNORE: &str = "\
-.kiro/
-.cursor/
-.windsurf/
-.claude/
-.continue/
-.copilot/
-.kilocode/
-.zencoder/
-.qwen/
-.agents/
-skills-lock.json
-";
-
-/// Appends the agentic-tooling ignore block to a fetched (or empty/failed)
+/// Appends the registry-derived agentic block to a fetched (or empty/failed)
 /// GitHub gitignore template. `fetched` is preserved unmodified as a prefix;
-/// the agentic block always follows, separated by a blank line and a
-/// boundary comment, so it survives even when the template fetch failed and
-/// `fetched` is empty.
+/// the agentic block always follows, separated by a blank line, so it
+/// survives even when the template fetch failed and `fetched` is empty.
 pub fn assemble_gitignore(fetched: &str) -> String {
     let mut out = String::from(fetched);
     if !out.is_empty() {
@@ -73,8 +50,7 @@ pub fn assemble_gitignore(fetched: &str) -> String {
         }
         out.push('\n');
     }
-    out.push_str(AGENTIC_GITIGNORE_HEADER);
-    out.push_str(AGENTIC_GITIGNORE);
+    out.push_str(&agentic::block());
     out
 }
 
@@ -567,6 +543,27 @@ mod tests {
             assert_ne!(line.trim(), "CLAUDE.md", "must not ignore CLAUDE.md");
             assert_ne!(line.trim(), "AGENTS.md", "must not ignore AGENTS.md");
         }
+    }
+
+    /// With nothing fetched (the fetch failed or there is no template), the
+    /// assembled `.gitignore` is exactly the block `gitkit ignore add agentic`
+    /// writes from the same registry snapshot.
+    #[test]
+    fn test_assemble_gitignore_empty_fetched_is_exactly_the_gitkit_block() {
+        assert_eq!(
+            assemble_gitignore(""),
+            include_str!("../../tests/fixtures/agentic-block.txt")
+        );
+    }
+
+    #[test]
+    fn test_assemble_gitignore_nonempty_contains_the_gitkit_block() {
+        let result = assemble_gitignore("target/\n");
+        assert!(result.starts_with("target/"), "{}", result);
+        assert!(
+            result.contains(include_str!("../../tests/fixtures/agentic-block.txt")),
+            "the agentic block must follow the fetched template verbatim"
+        );
     }
 
     #[test]
