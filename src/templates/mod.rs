@@ -2093,6 +2093,19 @@ jobs:
     }
 
     #[test]
+    fn remove_markdown_section_heading_at_first_line_keeps_no_blank() {
+        assert_eq!(remove_markdown_section("## A\nbody", "## A"), "");
+    }
+
+    #[test]
+    fn remove_markdown_section_keeps_non_blank_line_above_heading() {
+        assert_eq!(
+            remove_markdown_section("keep\n## A\nbody\n", "## A"),
+            "keep\n"
+        );
+    }
+
+    #[test]
     fn remove_markdown_section_absent_heading_is_unchanged() {
         let text = "# Title\n\n## Other\n";
         assert_eq!(remove_markdown_section(text, "## License"), text);
