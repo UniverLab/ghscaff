@@ -1296,13 +1296,13 @@ required = false
             cache_dir: tempfile::tempdir().unwrap().keep(),
         };
         let result = tmpl.apply_placeholders(
-            "{{name}}/{{description}}/{{github_org}}/{{github_repo}}",
-            "n",
+            "{{name}}/{{description}}/{{github_org}}/{{github_repo}}/{{license}}/{{module}}",
+            "my-app",
             "d",
             "o",
-            "",
+            "MIT",
         );
-        assert_eq!(result, "n/d/o/n");
+        assert_eq!(result, "my-app/d/o/my-app/MIT/my_app");
     }
 
     #[test]
