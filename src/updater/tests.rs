@@ -1160,3 +1160,34 @@ fn run_update_unparsable_response_exits_2() {
     assert_eq!(run_update(false, false, &fetcher, &downloader).unwrap(), 2);
     assert!(downloader.calls().is_empty());
 }
+
+// ── dry-run path (main maps `update --dry-run` to check = true) ───
+
+#[test]
+fn dry_run_reports_available_update_without_downloading() {
+    let current = current_version();
+    let fetcher = FakeFetcher {
+        body: Ok(release_list_body(&[current, fake_newer_tag()])),
+    };
+    let downloader = RecordingDownloader::new(make_tar_gz(&[("ghscaff", b"new")]), Err("x".into()));
+    // `--yes` is ignored on the dry-run path: still a read-only report.
+    assert_eq!(run_update(true, true, &fetcher, &downloader).unwrap(), 1);
+    assert!(
+        downloader.calls().is_empty(),
+        "dry run never downloads or installs"
+    );
+}
+
+#[test]
+fn dry_run_reports_up_to_date_without_downloading() {
+    let current = current_version();
+    let fetcher = FakeFetcher {
+        body: Ok(release_list_body(std::slice::from_ref(&current))),
+    };
+    let downloader = RecordingDownloader::new(make_tar_gz(&[("ghscaff", b"new")]), Err("x".into()));
+    assert_eq!(run_update(true, true, &fetcher, &downloader).unwrap(), 0);
+    assert!(
+        downloader.calls().is_empty(),
+        "dry run never downloads or installs"
+    );
+}

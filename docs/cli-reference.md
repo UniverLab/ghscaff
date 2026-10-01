@@ -21,14 +21,14 @@ Running `ghscaff` with no command starts the creation wizard (same as
 | `ghscaff apply [owner/repo]` | Configure an existing repository (auto-detected from git remote if omitted) |
 | `ghscaff doctor [owner/repo]` | Verify that required status checks can be satisfied (auto-detected from git remote if omitted) |
 | `ghscaff config` | Reconfigure credentials — wipes the vault and starts fresh |
-| `ghscaff update [--check] [--yes]` | Update to the latest stable release; always asks first. Exit codes: 0 = up to date (or installed / declined / cargo refusal), 1 = update available (`--check`), 2 = update check could not be completed (cause on stderr; also applies to plain `update`) |
+| `ghscaff update [--check] [--yes]` | Update to the latest stable release; always asks first. Exit codes: 0 = up to date (or installed / declined / cargo refusal), 1 = update available (`--check`), 2 = update check could not be completed (cause on stderr; also applies to plain `update`). `--dry-run` behaves like `--check`: it reports and never downloads or installs. |
 
 ## Global flags
 
 | Flag | Description |
 |---|---|
 | `--sponsor OWNER/REPO` | Enable GitHub Sponsor button on an existing repository |
-| `--dry-run` | Preview changes without making any API calls (rejected by `update`) |
+| `--dry-run` | Preview changes without making any API calls (`update --dry-run` reports like `--check`) |
 | `--help` | Show help for any command |
 | `--version` | Show ghscaff version |
 

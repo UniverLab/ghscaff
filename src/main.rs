@@ -72,6 +72,7 @@ enum Command {
     /// cargo-managed refusal), 1 = an update is available (--check mode),
     /// 2 = the update check could not be completed (network, HTTP, or an
     /// unparsable response; the cause is printed on stderr).
+    /// `--dry-run` behaves like `--check`: it reports and never downloads or installs.
     Update {
         /// Only report whether an update is available (exit 0 = up to date, 1 = update available, 2 = check failed)
         #[arg(long)]
@@ -94,11 +95,10 @@ fn main() -> Result<()> {
     // notice: `--check` must not pay for a duplicate lookup, and
     // GHSCAFF_NO_UPDATE_CHECK only silences the notice, never this.
     if let Some(Command::Update { check, yes }) = &cli.command {
-        if cli.dry_run {
-            anyhow::bail!("--dry-run has no effect on update");
-        }
+        // `--dry-run` is a real dry run of the update: the same report as
+        // `--check`, never a download, an install or a prompt.
         let code = updater::run_update(
-            *check,
+            update_check_mode(*check, cli.dry_run),
             *yes,
             &updater::RealFetcher::new(),
             &updater::RealDownloader,
@@ -114,6 +114,15 @@ fn main() -> Result<()> {
         Some(Command::Doctor { repo }) => doctor::run_doctor(repo.as_deref()),
         Some(Command::Update { .. }) => unreachable!("ghscaff update is handled above"),
     }
+}
+
+/// Resolve the read-only report mode of `update`: `--dry-run` implies
+/// `--check`, so a dry run reports exactly like a check (exit 0 = up to date,
+/// 1 = update available, 2 = check failed) and never reaches the prompt,
+/// the download or the install. `--yes` stays inert in that mode, which is
+/// what `run_update`'s early return guarantees.
+fn update_check_mode(check: bool, dry_run: bool) -> bool {
+    check || dry_run
 }
 
 fn run_config() -> Result<()> {
@@ -221,6 +230,43 @@ mod tests {
             }
             _ => panic!("expected Command::Update"),
         }
+    }
+
+    #[test]
+    fn test_cli_parses_update_dry_run_as_global_flag() {
+        let cli = Cli::try_parse_from(["ghscaff", "update", "--dry-run"]).unwrap();
+        assert!(cli.dry_run, "global --dry-run is set");
+        match cli.command {
+            Some(Command::Update { check, yes }) => {
+                assert!(!check, "--check defaults to false");
+                assert!(!yes, "--yes defaults to false");
+            }
+            _ => panic!("expected Command::Update"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_update_dry_run_before_subcommand() {
+        let cli = Cli::try_parse_from(["ghscaff", "--dry-run", "update"]).unwrap();
+        assert!(cli.dry_run, "global --dry-run is set before the subcommand");
+        assert!(matches!(cli.command, Some(Command::Update { .. })));
+    }
+
+    #[test]
+    fn update_dry_run_forces_check_mode() {
+        assert!(
+            update_check_mode(false, true),
+            "--dry-run alone reports like --check"
+        );
+        assert!(update_check_mode(true, false), "--check alone still checks");
+        assert!(
+            update_check_mode(true, true),
+            "--check --dry-run stays a report"
+        );
+        assert!(
+            !update_check_mode(false, false),
+            "plain update still installs after asking"
+        );
     }
 
     #[test]
