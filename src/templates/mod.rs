@@ -10,6 +10,15 @@ use crate::github::client::GithubClient;
 
 const BOILERPLATE_REPO: &str = "UniverLab/ghscaff-boilerplate";
 
+/// Snake_case module name derived from the kebab-case project name:
+/// lowercased with every `-` replaced by `_` (`astro-denoise` →
+/// `astro_denoise`). Used for the `{{module}}` placeholder so python
+/// boilerplates can ship `src/{{module}}/…` instead of a package literally
+/// named `src`.
+fn module_name(name: &str) -> String {
+    name.to_lowercase().replace('-', "_")
+}
+
 /// SPDX identifier rendered by the `{{license}}` placeholder. The wizard
 /// stores the choice as a display string; `GPL-3.0` is not an SPDX id, so it
 /// maps to `GPL-3.0-only`. `None` (no license chosen) renders empty.
@@ -85,12 +94,14 @@ impl RemoteTemplate {
         owner: &str,
         license: &str,
     ) -> String {
+        let module = module_name(name);
         content
             .replace("{{name}}", name)
             .replace("{{description}}", description)
             .replace("{{github_org}}", owner)
             .replace("{{github_repo}}", name)
             .replace("{{license}}", license)
+            .replace("{{module}}", &module)
     }
 
     /// The boilerplate language, taken from the cache directory name that
@@ -149,10 +160,11 @@ impl LanguageTemplate for RemoteTemplate {
                 continue;
             };
             let content = self.apply_placeholders(&raw, name, description, owner, spdx);
-            let Some(content) = adjust_for_no_license(&language, &rel, content, license) else {
+            let path = self.apply_placeholders(&rel, name, description, owner, spdx);
+            let Some(content) = adjust_for_no_license(&language, &path, content, license) else {
                 continue;
             };
-            files.push(RepoFile { path: rel, content });
+            files.push(RepoFile { path, content });
         }
         files.sort_by(|a, b| a.path.cmp(&b.path));
         files
@@ -1772,6 +1784,68 @@ jobs:
         assert_eq!(
             find(&files, "pyproject.toml"),
             "[project]\nversion = \"0.1.0\"\n"
+        );
+    }
+
+    #[test]
+    fn module_name_converts_kebab_to_snake() {
+        assert_eq!(module_name("astro-denoise"), "astro_denoise");
+        assert_eq!(module_name("my-app"), "my_app");
+        assert_eq!(module_name("UPPER-Case"), "upper_case");
+        assert_eq!(module_name("already_snake"), "already_snake");
+        assert_eq!(module_name("a-b-c"), "a_b_c");
+    }
+
+    #[test]
+    fn remote_template_apply_placeholders_replaces_module() {
+        let (_dir, tmpl) = fixture("python-module", &[]);
+        assert_eq!(
+            tmpl.apply_placeholders("from {{module}}.core import x", "astro-denoise", "", "", ""),
+            "from astro_denoise.core import x"
+        );
+    }
+
+    #[test]
+    fn render_python_module_fixture_substitutes_path_and_entry_point() {
+        let (_dir, tmpl) = fixture(
+            "python-module",
+            &[
+                ("src/{{module}}/__init__.py", ""),
+                (
+                    "pyproject.toml",
+                    "[project]\nname = \"{{name}}\"\n[project.scripts]\n{{name}} = \"{{module}}.cli:main\"\n",
+                ),
+            ],
+        );
+        let files = tmpl.boilerplate_files("astro-denoise", "Denoise spectra", "univerlab", None);
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            paths.contains(&"src/astro_denoise/__init__.py"),
+            "paths: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("{{module}}")),
+            "no path should still contain a placeholder: {paths:?}"
+        );
+        let pyproject = find(&files, "pyproject.toml");
+        assert!(pyproject.contains("\"astro_denoise.cli:main\""));
+        assert!(!pyproject.contains("{{module}}"));
+    }
+
+    #[test]
+    fn render_paths_without_placeholders_are_unchanged() {
+        let (_dir, tmpl) = rust_fixture();
+        let files = tmpl.boilerplate_files("my-cool-app", "desc", "org", Some("MIT"));
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            &[
+                ".github/workflows/ci.yml",
+                ".github/workflows/release.yml",
+                "Cargo.toml",
+                "README.md",
+                "src/main.rs",
+            ]
         );
     }
 
