@@ -104,6 +104,7 @@ Updating is always explicit — ghscaff never installs anything on its own:
 ghscaff update            # asks "Update to 0.7.0? [y/N]" — default is NO
 ghscaff update --yes      # skip the prompt
 ghscaff update --check    # report only: exit 0 = up to date, 1 = update available, 2 = the check could not be completed
+ghscaff update --dry-run  # same as --check: report only, never downloads or installs
 ```
 
 On "yes", ghscaff downloads the release asset for your platform, verifies it
@@ -119,6 +120,7 @@ release check cannot be completed — no network, DNS or TLS failure, HTTP ≥ 4
 or an unparsable release-list response — and prints the cause on stderr; other
 failures (download, checksum, permissions) are ordinary errors (exit 1).
 `--check` exits 1 when an update is available, 0 when the binary is current.
+`--dry-run` behaves like `--check`: it reports and never downloads or installs.
 
 If you installed ghscaff with `cargo install`, `ghscaff update` refuses to
 touch the binary and instead prints:
