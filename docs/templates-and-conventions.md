@@ -16,10 +16,15 @@ Each language template includes:
 - **.gitignore** — GitHub's official template for the language, followed by an
   agentic block (see below).
 - **.github/workflows/ci.yml** — CI workflow with basic checks.
-- **.github/workflows/release.yml** — release workflow (runs on git tags).
+- **.github/workflows/release.yml** — release workflow (runs on git tags; skipped when no license is chosen).
 - **LICENSE** — fetched from the API based on the license selected during the wizard.
 
 All files land in a single atomic `chore: init repository` commit.
+
+When the wizard's license choice is **None**, the scaffold is marked
+unpublishable: `Cargo.toml` gets `publish = false` instead of `license-file`,
+the `rust-ci` job runs with `publish-check: false`, no `release.yml` is
+committed, and `pyproject.toml` keeps no `license = …` line.
 
 ### The agentic .gitignore block
 

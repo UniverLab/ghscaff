@@ -284,10 +284,15 @@ Each language template includes:
 - **README.md** — Template with placeholders for name and description
 - **.gitignore** — Language-specific (fetched from GitHub API)
 - **.github/workflows/ci.yml** — CI/CD workflow with basic checks
-- **.github/workflows/release.yml** — Release workflow (published on Git tags)
+- **.github/workflows/release.yml** — Release workflow (published on Git tags; omitted when no license is chosen)
 - **LICENSE** — Placeholder (user selects license type during wizard)
 
 All files are merged into a single atomic `chore: init repository` commit.
+
+Choosing **None** for the license scaffolds an unpublishable project: a Rust
+crate gets `publish = false` instead of `license-file` in `Cargo.toml`, the CI
+workflow runs with `publish-check: false`, `release.yml` is not created, and a
+Python project gets no `license = …` line in `pyproject.toml`.
 
 ---
 

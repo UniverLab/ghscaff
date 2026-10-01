@@ -304,16 +304,23 @@ fn strip_python_license(pyproject: &str) -> String {
     join_lines(kept, pyproject.ends_with('\n'))
 }
 
+/// True for a TOML `license = …` / `license=…` key line, however much
+/// whitespace surrounds the `=`. `license-files = […]` is a different key and
+/// does not match: the text right after `license` must lead to `=`.
 fn is_python_license_line(line: &str) -> bool {
-    let t = line.trim_start();
-    t.starts_with("license =") || t.starts_with("license=")
+    line.trim_start()
+        .strip_prefix("license")
+        .is_some_and(|rest| rest.trim_start().starts_with('='))
 }
 
 /// Add `publish-check: false` to the `rust-ci` job. If the job already has a
 /// `with:` block the flag goes under it; otherwise a `with:` block is inserted
-/// right after the job's `uses:` line. An existing `publish-check` is left
-/// alone. Insertion is scoped to the `rust-ci` job so a later job is never
-/// modified, and the file's trailing newline is preserved.
+/// right after the job's `uses:` line. An existing `publish-check` line is
+/// rewritten to `false` — a `publish-check: true` left in place would keep
+/// failing the first PR of a crate that cannot be published, which is exactly
+/// what this transform exists to prevent. Insertion is scoped to the `rust-ci`
+/// job so a later job is never modified, and the file's trailing newline is
+/// preserved.
 fn add_publish_check_false(ci_yml: &str) -> String {
     let trailing = ci_yml.ends_with('\n');
     let mut lines: Vec<String> = ci_yml.lines().map(str::to_string).collect();
@@ -322,17 +329,23 @@ fn add_publish_check_false(ci_yml: &str) -> String {
     };
     let job_indent = indent_of(&lines[job]);
     let end = job_block_end(&lines, job, job_indent);
-    if has_publish_check(&lines[job..end]) {
-        return ci_yml.to_string();
+    if set_publish_check_false(&mut lines, job, end) {
+        return join_lines(lines, trailing);
     }
     insert_publish_check(&mut lines, job, end, job_indent);
     join_lines(lines, trailing)
 }
 
-fn has_publish_check(job_block: &[String]) -> bool {
-    job_block
-        .iter()
-        .any(|l| l.trim_start().starts_with("publish-check:"))
+/// Rewrite an existing `publish-check:` line inside the job to `false`,
+/// keeping its indentation; `false` when the job has no such line yet (the
+/// caller then inserts one).
+fn set_publish_check_false(lines: &mut [String], job: usize, end: usize) -> bool {
+    let Some(i) = (job..end).find(|&i| lines[i].trim_start().starts_with("publish-check:")) else {
+        return false;
+    };
+    let indent = indent_of(&lines[i]);
+    lines[i] = format!("{}publish-check: false", " ".repeat(indent));
+    true
 }
 
 fn insert_publish_check(lines: &mut Vec<String>, job: usize, end: usize, job_indent: usize) {
@@ -1541,6 +1554,12 @@ jobs:
     }
 
     #[test]
+    fn strip_python_license_tolerates_extra_whitespace_around_equals() {
+        let input = "[project]\nname  = \"demo\"\nlicense  = \"MIT\"\nlicense\t= \"GPL\"\n";
+        assert_eq!(strip_python_license(input), "[project]\nname  = \"demo\"\n");
+    }
+
+    #[test]
     fn add_publish_check_false_inserts_with_block() {
         let out = add_publish_check_false(FIXTURE_CI_YML);
         assert!(out.contains("    with:\n      publish-check: false"));
@@ -1559,9 +1578,21 @@ jobs:
     }
 
     #[test]
-    fn add_publish_check_false_keeps_existing_publish_check() {
+    fn add_publish_check_false_rewrites_existing_publish_check() {
+        // A `publish-check: true` would keep failing the first PR of an
+        // unpublished crate, so it must be corrected, not preserved.
         let input =
             "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n    with:\n      publish-check: true\n";
+        assert_eq!(
+            add_publish_check_false(input),
+            "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n    with:\n      publish-check: false\n"
+        );
+    }
+
+    #[test]
+    fn add_publish_check_false_is_idempotent_when_already_false() {
+        let input =
+            "jobs:\n  rust-ci:\n    uses: org/ci.yml@main\n    with:\n      publish-check: false\n";
         assert_eq!(add_publish_check_false(input), input);
     }
 
