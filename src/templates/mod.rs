@@ -248,6 +248,11 @@ fn cache_dir() -> Result<PathBuf> {
 /// means the file must be omitted from the init commit; `Some(text)` is the
 /// rewritten content. A chosen license leaves every file untouched.
 ///
+/// In addition, no license means no `LICENSE` file — and for rust no
+/// `release.yml` — so the rendered docs stop describing them: every
+/// language's `README.md` loses its `## License` section and, for rust,
+/// `CONTRIBUTING.md` loses its `## Release process` section.
+///
 /// * rust — the crate cannot be published without a LICENSE, so drop the
 ///   publish-only release workflow, stop referencing a LICENSE file, and pass
 ///   `publish-check: false` to the shared rust-ci workflow.
@@ -261,6 +266,13 @@ fn adjust_for_no_license(
     if license.is_some() {
         return Some(content);
     }
+    let content = match rel {
+        "README.md" => remove_markdown_section(&content, "## License"),
+        "CONTRIBUTING.md" if language == "rust" => {
+            remove_markdown_section(&content, "## Release process")
+        }
+        _ => content,
+    };
     if language == "rust" {
         return match rel {
             ".github/workflows/release.yml" => None,
@@ -376,6 +388,29 @@ fn join_lines(lines: Vec<String>, trailing_newline: bool) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Remove a markdown section: the line equal to `heading` (after trimming
+/// trailing whitespace), every line up to (not including) the next line
+/// starting with `## ` or the end of file, and the single blank line directly
+/// above the heading if there is one. Returns `text` unchanged when the
+/// heading is absent.
+fn remove_markdown_section(text: &str, heading: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines.iter().position(|l| l.trim_end() == heading) else {
+        return text.to_string();
+    };
+    let end = (start + 1..lines.len())
+        .find(|&i| lines[i].starts_with("## "))
+        .unwrap_or(lines.len());
+    let cut = usize::from(start > 0 && lines[start - 1].trim_end().is_empty());
+    let mut kept: Vec<String> = lines[..start - cut]
+        .iter()
+        .copied()
+        .map(str::to_string)
+        .collect();
+    kept.extend(lines[end..].iter().copied().map(str::to_string));
+    join_lines(kept, text.ends_with('\n'))
 }
 
 #[allow(dead_code)]
@@ -1986,5 +2021,220 @@ jobs:
         assert!(!find(&none, "Cargo.toml").contains("license-file"));
         assert!(find(&none, ".github/workflows/ci.yml")
             .contains("    with:\n      publish-check: false"));
+    }
+
+    // ── remove_markdown_section + doc trimming without a license ──
+
+    /// Mirrors the real boilerplate README: `## License` is the last `## `
+    /// section, preceded by a blank line.
+    const FIXTURE_README_LICENSE: &str = "# {{name}}\n\n{{description}}\n\n## Getting started\n\nRun `cargo run`.\n\n## License\n\nThis project is licensed under the MIT License — see LICENSE for details.\n";
+
+    /// Mirrors the real rust CONTRIBUTING: `## Release process` is a middle
+    /// section ending at `## Code style`.
+    const FIXTURE_CONTRIBUTING_RELEASE: &str = "# Contributing to {{name}}\n\n## Development workflow\n\nFork, branch, PR.\n\n## Release process\n\nReleases are automated via the `release.yml` workflow.\n\n## Code style\n\nRun `cargo fmt`.\n";
+
+    #[test]
+    fn remove_markdown_section_removes_middle_section() {
+        // The single blank line above the heading leaves with the section, so
+        // the next heading ends up glued to the preceding line (spec rule).
+        assert_eq!(
+            remove_markdown_section("top\n\n## A\nbody\nmore\n\n## B\ntail\n", "## A"),
+            "top\n## B\ntail\n"
+        );
+    }
+
+    #[test]
+    fn remove_markdown_section_removes_end_of_file_section() {
+        assert_eq!(
+            remove_markdown_section("keep\n\n## License\n\nlicensed text\n", "## License"),
+            "keep\n"
+        );
+        assert_eq!(
+            remove_markdown_section("keep\n\n## A\nbody", "## A"),
+            "keep"
+        );
+    }
+
+    #[test]
+    fn remove_markdown_section_absent_heading_is_unchanged() {
+        let text = "# Title\n\n## Other\n";
+        assert_eq!(remove_markdown_section(text, "## License"), text);
+    }
+
+    #[test]
+    fn remove_markdown_section_does_not_match_deeper_subsection() {
+        // `### License` is neither the heading nor a section end, so nothing
+        // is removed.
+        let text = "## Foo\n\n### License\n\nx\n";
+        assert_eq!(remove_markdown_section(text, "## License"), text);
+        // Trailing whitespace on the heading line is trimmed before matching.
+        assert_eq!(
+            remove_markdown_section("keep\n\n## License  \nbody\n", "## License"),
+            "keep\n"
+        );
+    }
+
+    fn docs_fixture(language: &str) -> (tempfile::TempDir, RemoteTemplate) {
+        fixture(
+            language,
+            &[
+                ("README.md", FIXTURE_README_LICENSE),
+                ("CONTRIBUTING.md", FIXTURE_CONTRIBUTING_RELEASE),
+            ],
+        )
+    }
+
+    #[test]
+    fn render_rust_docs_fixture_without_license_drops_license_and_release_sections() {
+        let (_dir, tmpl) = docs_fixture("rust");
+        let files = tmpl.boilerplate_files("myrepo", "My description", "myorg", None);
+
+        let readme = find(&files, "README.md");
+        assert!(!readme.contains("## License"));
+        assert!(!readme.contains("licensed under"));
+        assert!(readme.contains("## Getting started"));
+
+        let contributing = find(&files, "CONTRIBUTING.md");
+        assert!(!contributing.contains("## Release process"));
+        assert!(!contributing.contains("release.yml"));
+        assert!(contributing.contains("## Development workflow"));
+        assert!(contributing.contains("## Code style"));
+        // The blank line above the heading went with the section, so the next
+        // heading follows the previous body line directly.
+        assert!(contributing.contains("Fork, branch, PR.\n## Code style"));
+    }
+
+    #[test]
+    fn render_rust_docs_fixture_with_mit_keeps_both_sections() {
+        let (_dir, tmpl) = docs_fixture("rust");
+        let files = tmpl.boilerplate_files("myrepo", "My description", "myorg", Some("MIT"));
+        assert_eq!(
+            find(&files, "README.md"),
+            "# myrepo\n\nMy description\n\n## Getting started\n\nRun `cargo run`.\n\n## License\n\nThis project is licensed under the MIT License — see LICENSE for details.\n"
+        );
+        assert_eq!(
+            find(&files, "CONTRIBUTING.md"),
+            "# Contributing to myrepo\n\n## Development workflow\n\nFork, branch, PR.\n\n## Release process\n\nReleases are automated via the `release.yml` workflow.\n\n## Code style\n\nRun `cargo fmt`.\n"
+        );
+    }
+
+    #[test]
+    fn render_python_docs_fixture_without_license_keeps_release_process() {
+        let (_dir, tmpl) = docs_fixture("python-module");
+
+        let none = tmpl.boilerplate_files("demo", "d", "org", None);
+        assert!(!find(&none, "README.md").contains("## License"));
+        assert!(find(&none, "CONTRIBUTING.md").contains("## Release process"));
+
+        let mit = tmpl.boilerplate_files("demo", "d", "org", Some("MIT"));
+        assert!(find(&mit, "README.md").contains("## License"));
+        assert!(find(&mit, "CONTRIBUTING.md").contains("## Release process"));
+    }
+
+    // ── FR4 evidence: the REAL boilerplates, rendered with and without a license ──
+
+    /// Recursively copy a boilerplate language tree into the scratch dir,
+    /// keeping the language directory name (`RemoteTemplate::language()` reads
+    /// it from `cache_dir`). The originals are only read, never written.
+    fn copy_tree(src: &Path, dst: &Path) {
+        std::fs::create_dir_all(dst).unwrap();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let target = dst.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).unwrap();
+            }
+        }
+    }
+
+    fn print_headings(prefix: &str, content: &str) {
+        for line in content.lines().filter(|l| l.starts_with('#')) {
+            eprintln!("{prefix}{line}");
+        }
+    }
+
+    /// What the printed evidence must show, asserted so it cannot drift:
+    /// `None` drops `## License` from every README and `## Release process`
+    /// only from the rust CONTRIBUTING; a chosen license changes nothing.
+    fn assert_license_headings(lang: &str, label: &str, readme: &str, contributing: &str) {
+        let kept: &[&str] = if lang == "rust" {
+            &["## Getting started", "## Development"]
+        } else {
+            &[
+                "## Getting started",
+                "## Development",
+                "## Project structure",
+            ]
+        };
+        for heading in kept {
+            assert!(
+                readme.contains(heading),
+                "{lang}/{label} README must keep {heading}"
+            );
+        }
+        if label == "MIT" {
+            assert!(readme.contains("## License"), "{lang}/MIT README");
+            assert!(
+                contributing.contains("## Release process"),
+                "{lang}/MIT CONTRIBUTING"
+            );
+            return;
+        }
+        assert!(!readme.contains("## License"), "{lang}/None README");
+        assert!(
+            !readme.contains("LICENSE"),
+            "{lang}/None README mentions LICENSE"
+        );
+        if lang == "rust" {
+            assert!(!contributing.contains("## Release process"));
+            for heading in [
+                "## Development workflow",
+                "## CI/CD and required secrets",
+                "## Code style",
+            ] {
+                assert!(contributing.contains(heading), "rust/None keeps {heading}");
+            }
+        } else {
+            // python keeps its publish.yml story, so the section stays.
+            assert!(contributing.contains("## Release process"));
+        }
+    }
+
+    /// FR4 evidence — renders the REAL `ghscaff-boilerplate` trees (copied
+    /// into a scratch dir under /tmp; the originals are untouched) with `MIT`
+    /// and with no license, printing every `#` heading of README.md and
+    /// CONTRIBUTING.md. Skips when the sibling checkout is absent. No network
+    /// and no GitHub repository is created.
+    #[test]
+    fn evidence_real_boilerplate_docs_with_and_without_license() {
+        let src = match dirs::home_dir() {
+            Some(home) => home.join("Projects/UniverLab/ghscaff-boilerplate"),
+            None => return,
+        };
+        if !src.join("rust").is_dir() || !src.join("python-module").is_dir() {
+            eprintln!("[evidence-real] boilerplate checkout absent — skipped");
+            return;
+        }
+        let scratch = tempfile::tempdir().unwrap();
+        eprintln!("[evidence-real] scratch: {}", scratch.path().display());
+        for lang in ["rust", "python-module"] {
+            copy_tree(&src.join(lang), &scratch.path().join(lang));
+            let tmpl = RemoteTemplate {
+                cache_dir: scratch.path().join(lang),
+            };
+            for license in [Some("MIT"), None] {
+                let label = license.unwrap_or("None");
+                let files = tmpl.boilerplate_files("demo", "A demo", "univerlab", license);
+                let readme = find(&files, "README.md");
+                let contributing = find(&files, "CONTRIBUTING.md");
+                eprintln!("[evidence-real] {lang}/{label} README.md:");
+                print_headings("  ", readme);
+                eprintln!("[evidence-real] {lang}/{label} CONTRIBUTING.md:");
+                print_headings("  ", contributing);
+                assert_license_headings(lang, label, readme, contributing);
+            }
+        }
     }
 }
