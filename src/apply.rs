@@ -246,27 +246,49 @@ pub struct SyncResult {
     pub deleted: usize,
 }
 
-/// Main apply mode orchestrator
-pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
-    // Get token
-    let (token, passphrase) = crate::github::client::resolve_token()?;
-    let client = crate::github::client::GithubClient::new(&token);
+/// Everything `run_apply` resolves once up front: the API client, the
+/// owner/repo being updated, and the vault passphrase used for template secrets.
+struct ApplyTarget {
+    client: GithubClient,
+    owner: String,
+    repo_name: String,
+    passphrase: String,
+}
 
-    // Determine repo
-    let (owner, repo_name) = if let Some(repo) = repo_arg {
-        parse_owner_repo(repo)?
-    } else {
-        auto_detect_repo()?
-    };
+impl ApplyTarget {
+    /// Resolve the token, build the client and determine the target repo.
+    fn resolve(repo_arg: Option<&str>) -> Result<Self> {
+        let (token, passphrase) = crate::github::client::resolve_token()?;
+        let client = GithubClient::new(&token);
 
-    println!("  Checking existing repo... {}/{}", owner, repo_name);
-    let ctx = get_repo_state(&client, &owner, &repo_name)?;
+        let (owner, repo_name) = if let Some(repo) = repo_arg {
+            parse_owner_repo(repo)?
+        } else {
+            auto_detect_repo()?
+        };
+
+        Ok(Self {
+            client,
+            owner,
+            repo_name,
+            passphrase,
+        })
+    }
+}
+
+/// Print the "checking" line, fetch the repo state and show the summary.
+fn print_apply_preview(target: &ApplyTarget) -> Result<ApplyContext> {
+    println!(
+        "  Checking existing repo... {}/{}",
+        target.owner, target.repo_name
+    );
+    let ctx = get_repo_state(&target.client, &target.owner, &target.repo_name)?;
 
     // Display summary
     println!();
     println!("  Summary of changes:");
     println!("  ◆ Labels: checking...");
-    let label_result = sync_labels(&client, &owner, &repo_name, true)?; // dry check
+    let label_result = sync_labels(&target.client, &target.owner, &target.repo_name, true)?; // dry check
     if label_result.created > 0 || label_result.updated > 0 || label_result.deleted > 0 {
         println!(
             "    • {} to create, {} to update, {} to delete, {} up to date",
@@ -303,76 +325,98 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
         }
     });
 
-    if dry_run {
-        println!();
-        println!("  [dry-run] No changes applied.");
-        return Ok(());
-    }
+    Ok(ctx)
+}
 
-    println!();
-    let mut selected_teams: Vec<teams::TeamAccess> = vec![];
-
+/// Ask whether to grant org teams access and, if so, collect the selected
+/// teams with the permission picked for each of them.
+fn collect_apply_team_access(client: &GithubClient, owner: &str) -> Result<Vec<teams::TeamAccess>> {
     let want_teams = inquire::Confirm::new("Add team access?")
         .with_default(false)
         .prompt()?;
+    collect_team_access_after(client, owner, want_teams, |team_names| {
+        Ok(inquire::MultiSelect::new("Select teams:", team_names)
+            .with_help_message("space select  enter confirm")
+            .prompt_skippable()?)
+    })
+}
 
-    if want_teams {
-        if let Ok(org_teams) = list_org_teams(&client, &owner) {
-            if !org_teams.is_empty() {
-                let team_names: Vec<String> = org_teams.iter().map(|t| t.name.clone()).collect();
-
-                if let Ok(Some(selections)) =
-                    inquire::MultiSelect::new("Select teams:", team_names.clone())
-                        .with_help_message("space select  enter confirm")
-                        .prompt_skippable()
-                {
-                    for selected_team_display in selections {
-                        if let Some(team) =
-                            org_teams.iter().find(|t| t.name == selected_team_display)
-                        {
-                            let permission = inquire::Select::new(
-                                &format!("Permission for {} team:", team.name),
-                                vec!["pull", "triage", "push", "admin"],
-                            )
-                            .prompt()?;
-
-                            selected_teams.push(teams::TeamAccess {
-                                team_slug: team.slug.clone(),
-                                permission: permission.to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
+/// The prompt-free remainder of [`collect_apply_team_access`]: list the org
+/// teams and collect the selection once the user already said yes. The
+/// team-selection prompt is injected so tests can drive every branch
+/// without a TTY.
+fn collect_team_access_after(
+    client: &GithubClient,
+    owner: &str,
+    want_teams: bool,
+    prompt_selections: impl Fn(Vec<String>) -> Result<Option<Vec<String>>>,
+) -> Result<Vec<teams::TeamAccess>> {
+    if !want_teams {
+        return Ok(vec![]);
     }
 
-    println!();
-    let confirmed = inquire::Confirm::new("Apply these changes?")
-        .with_default(true)
-        .prompt()?;
-
-    if !confirmed {
-        println!("  Aborted.");
-        return Ok(());
+    let Ok(org_teams) = list_org_teams(client, owner) else {
+        return Ok(vec![]);
+    };
+    if org_teams.is_empty() {
+        return Ok(vec![]);
     }
 
-    // Apply all changes
-    println!();
-    println!("  Applying changes...");
+    let team_names: Vec<String> = org_teams.iter().map(|t| t.name.clone()).collect();
+    let Some(selections) = prompt_selections(team_names)? else {
+        return Ok(vec![]);
+    };
 
-    // 1. Labels
-    sync_labels(&client, &owner, &repo_name, false)?;
+    select_team_access(&org_teams, &selections, prompt_apply_team_permission)
+}
+
+/// Match each selected display name against the org team list and resolve
+/// the permission for every match through `permission_for`.
+fn select_team_access(
+    org_teams: &[teams::Team],
+    selections: &[String],
+    permission_for: impl Fn(&teams::Team) -> Result<teams::TeamAccess>,
+) -> Result<Vec<teams::TeamAccess>> {
+    let mut selected_teams = vec![];
+    for selected_team_display in selections {
+        let Some(team) = org_teams.iter().find(|t| t.name == *selected_team_display) else {
+            continue;
+        };
+        selected_teams.push(permission_for(team)?);
+    }
+    Ok(selected_teams)
+}
+
+/// Ask which permission to grant one selected team.
+fn prompt_apply_team_permission(team: &teams::Team) -> Result<teams::TeamAccess> {
+    let permission = inquire::Select::new(
+        &format!("Permission for {} team:", team.name),
+        vec!["pull", "triage", "push", "admin"],
+    )
+    .prompt()?;
+
+    Ok(teams::TeamAccess {
+        team_slug: team.slug.clone(),
+        permission: permission.to_string(),
+    })
+}
+
+/// Step 1 — sync the standard label set.
+fn apply_labels_step(target: &ApplyTarget) -> Result<()> {
+    sync_labels(&target.client, &target.owner, &target.repo_name, false)?;
     println!("  ✓ Labels synced");
+    Ok(())
+}
 
-    // 2. Branch protection (always apply to ensure correct config) — required
-    // contexts are derived from the repo's live workflow files, never hardcoded,
-    // so a renamed job can't leave a required check pointing at a name nothing
-    // will ever report.
+/// Step 2 — branch protection (always applied to ensure the correct config).
+/// Required contexts are derived from the repo's live workflow files, never
+/// hardcoded, so a renamed job can't leave a required check pointing at a
+/// name nothing will ever report.
+fn apply_branch_protection_step(target: &ApplyTarget) -> Result<()> {
     let workflow_files = crate::github::contents::fetch_workflow_sources(
-        &client,
-        &owner,
-        &repo_name,
+        &target.client,
+        &target.owner,
+        &target.repo_name,
         &[".github/workflows/ci.yml"],
     );
     let workflow_sources: Vec<crate::checks::WorkflowSource> = workflow_files
@@ -381,9 +425,9 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
         .collect();
     let required_contexts = crate::checks::derive_required_contexts(&workflow_sources);
     match crate::github::branches::apply_branch_protection(
-        &client,
-        &owner,
-        &repo_name,
+        &target.client,
+        &target.owner,
+        &target.repo_name,
         "main",
         &required_contexts,
     ) {
@@ -400,15 +444,28 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
 
-    // 3. Develop branch (if needed)
-    if !ctx.has_develop {
-        create_develop_branch(&client, &owner, &repo_name)?;
-        println!("  ✓ develop branch created");
+/// Step 3 — develop branch, when it doesn't exist yet.
+fn apply_develop_branch_step(target: &ApplyTarget, ctx: &ApplyContext) -> Result<()> {
+    if ctx.has_develop {
+        return Ok(());
     }
+    create_develop_branch(&target.client, &target.owner, &target.repo_name)?;
+    println!("  ✓ develop branch created");
+    Ok(())
+}
 
-    // 4. Merge topics
-    match merge_topics(&client, &owner, &repo_name, &["github", "scaffold"], false) {
+/// Step 4 — merge the scaffold topics into the repo's topic list.
+fn apply_topics_step(target: &ApplyTarget) -> Result<()> {
+    match merge_topics(
+        &target.client,
+        &target.owner,
+        &target.repo_name,
+        &["github", "scaffold"],
+        false,
+    ) {
         Ok(true) => println!("  ✓ Topics updated"),
         Ok(false) => {}
         Err(e) => {
@@ -420,13 +477,19 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
 
-    // 5. Team access
-    for team in &selected_teams {
+/// Step 5 — grant the teams selected earlier access to the repo.
+fn apply_team_access_step(
+    target: &ApplyTarget,
+    selected_teams: &[teams::TeamAccess],
+) -> Result<()> {
+    for team in selected_teams {
         match add_team_to_repo(
-            &client,
-            &owner,
-            &repo_name,
+            &target.client,
+            &target.owner,
+            &target.repo_name,
             &team.team_slug,
             &team.permission,
             false,
@@ -448,38 +511,105 @@ pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
 
-    // 6. Secrets from template (detected from the repo's marker files)
-    let secret_specs = detect_template_secrets(&client, &owner, &repo_name);
-    if !secret_specs.is_empty() {
-        let existing = secrets::list_secret_names(&client, &owner, &repo_name).unwrap_or_default();
-        let missing: Vec<_> = secret_specs
-            .iter()
-            .filter(|s| !existing.iter().any(|e| e == &s.name))
-            .collect();
-        if !missing.is_empty() {
-            println!();
-            println!("  ◆ Secrets required by template:");
-            for spec in &missing {
-                println!("    • {} — {}", spec.name, spec.description);
-            }
-            println!();
-            for spec in missing {
-                let value =
-                    if let Some(val) = crate::vault::resolve_secret(&spec.name, &passphrase)? {
-                        Some(val)
-                    } else {
-                        crate::wizard::prompt_secret_value(spec, &passphrase)?
-                    };
-                if let Some(val) = value {
-                    match secrets::set_secret(&client, &owner, &repo_name, &spec.name, &val) {
-                        Ok(()) => println!("  ✓ Secret {} configured", spec.name),
-                        Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
-                    }
-                }
+/// Step 6 — secrets from the template (detected from the repo's marker
+/// files), skipping the ones the repo already has.
+fn apply_missing_secrets_step(target: &ApplyTarget) -> Result<()> {
+    let secret_specs = detect_template_secrets(&target.client, &target.owner, &target.repo_name);
+    if secret_specs.is_empty() {
+        return Ok(());
+    }
+
+    let existing = secrets::list_secret_names(&target.client, &target.owner, &target.repo_name)
+        .unwrap_or_default();
+    let missing: Vec<_> = secret_specs
+        .iter()
+        .filter(|s| !existing.iter().any(|e| e == &s.name))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    println!();
+    println!("  ◆ Secrets required by template:");
+    for spec in &missing {
+        println!("    • {} — {}", spec.name, spec.description);
+    }
+    println!();
+    for spec in missing {
+        let value = if let Some(val) = crate::vault::resolve_secret(&spec.name, &target.passphrase)?
+        {
+            Some(val)
+        } else {
+            crate::wizard::prompt_secret_value(spec, &target.passphrase)?
+        };
+        if let Some(val) = value {
+            match secrets::set_secret(
+                &target.client,
+                &target.owner,
+                &target.repo_name,
+                &spec.name,
+                &val,
+            ) {
+                Ok(()) => println!("  ✓ Secret {} configured", spec.name),
+                Err(e) => println!("  ⚠ Failed to set {}: {e:#}", spec.name),
             }
         }
     }
+    Ok(())
+}
+
+/// Main apply mode orchestrator
+pub fn run_apply(repo_arg: Option<&str>, dry_run: bool) -> Result<()> {
+    let target = ApplyTarget::resolve(repo_arg)?;
+    let ctx = print_apply_preview(&target)?;
+    apply_changes(&target, &ctx, dry_run)
+}
+
+/// The prompt-free remainder of [`run_apply`] after the preview: honour
+/// `dry_run`, then collect the team selection and the final confirmation.
+fn apply_changes(target: &ApplyTarget, ctx: &ApplyContext, dry_run: bool) -> Result<()> {
+    if dry_run {
+        println!();
+        println!("  [dry-run] No changes applied.");
+        return Ok(());
+    }
+
+    println!();
+    let selected_teams = collect_apply_team_access(&target.client, &target.owner)?;
+
+    println!();
+    let confirmed = inquire::Confirm::new("Apply these changes?")
+        .with_default(true)
+        .prompt()?;
+
+    apply_confirmed(target, ctx, &selected_teams, confirmed)
+}
+
+/// Run every apply step once the user confirmed; a declined confirmation
+/// aborts before any request is made.
+fn apply_confirmed(
+    target: &ApplyTarget,
+    ctx: &ApplyContext,
+    selected_teams: &[teams::TeamAccess],
+    confirmed: bool,
+) -> Result<()> {
+    if !confirmed {
+        println!("  Aborted.");
+        return Ok(());
+    }
+
+    // Apply all changes
+    println!();
+    println!("  Applying changes...");
+    apply_labels_step(target)?;
+    apply_branch_protection_step(target)?;
+    apply_develop_branch_step(target, ctx)?;
+    apply_topics_step(target)?;
+    apply_team_access_step(target, selected_teams)?;
+    apply_missing_secrets_step(target)?;
 
     println!();
     println!("  Done!");
@@ -520,6 +650,9 @@ fn create_develop_branch(client: &GithubClient, owner: &str, repo_name: &str) ->
     branches::create_branch(client, owner, repo_name, "develop", &main_sha)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod step_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1492,7 +1625,9 @@ mod tests {
 
     #[test]
     fn detect_template_secrets_finds_rust_markers() {
+        use super::super::github::test_utils::env_lock;
         use base64::{engine::general_purpose::STANDARD, Engine};
+        let _guard = env_lock();
 
         let cargo_encoded = STANDARD.encode(b"[package]\nname = \"test\"");
 

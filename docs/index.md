@@ -29,7 +29,8 @@ existing repositories at any time.
 - **Doctor** — validate that required status checks can be satisfied.
 - **Language templates** — Rust today; Python, Node.js and Java coming.
 - **Template secrets** — required Actions secrets configured automatically.
-- **Self-update** — replaces the running binary; handles `cargo install` specially.
+- **Explicit self-update** — `ghscaff update` always asks; cargo installs
+  untouched; your `~/.ghscaff` state is never modified.
 
 ## How the documentation is organized
 

@@ -2,11 +2,13 @@ use anyhow::Result;
 use inquire::{Confirm, MultiSelect, Password, Select, Text};
 
 use crate::github::{
-    branches,
     client::{resolve_token, GithubClient},
-    contents, labels, repo, secrets, sponsors, teams,
+    repo, sponsors, teams,
 };
 use crate::templates;
+
+mod execution;
+use execution::execute;
 
 const BANNER: &str = r#"
           █████       █████████                        ██████     ██████ 
@@ -114,18 +116,24 @@ fn collect_team_access(client: &GithubClient, _org: &str) -> Result<Vec<teams::T
     Ok(team_access)
 }
 
+/// Validator for the first wizard prompt: reject an empty (or
+/// whitespace-only) repository name before anything else is asked.
+fn validate_repo_name(
+    input: &str,
+) -> Result<inquire::validator::Validation, inquire::CustomUserError> {
+    if input.trim().is_empty() {
+        Ok(inquire::validator::Validation::Invalid(
+            "Repository name cannot be empty".into(),
+        ))
+    } else {
+        Ok(inquire::validator::Validation::Valid)
+    }
+}
+
 fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig> {
     // Step 1 — Repository basics
     let name = Text::new("Repository name:")
-        .with_validator(|input: &str| {
-            if input.trim().is_empty() {
-                Ok(inquire::validator::Validation::Invalid(
-                    "Repository name cannot be empty".into(),
-                ))
-            } else {
-                Ok(inquire::validator::Validation::Valid)
-            }
-        })
+        .with_validator(validate_repo_name)
         .prompt()?;
     let description = Text::new("Description:").with_default("").prompt()?;
     let topics_raw = Text::new("Topics:")
@@ -218,252 +226,6 @@ fn collect_config(client: &GithubClient, username: &str) -> Result<WizardConfig>
         create_labels: features.contains(&"Standard labels"),
         team_access,
     })
-}
-
-fn execute(
-    client: &GithubClient,
-    c: &WizardConfig,
-    dry_run: bool,
-    token: &str,
-    passphrase: &str,
-) -> Result<()> {
-    println!();
-
-    // Fetch template if selected
-    let tmpl = if let Some(lang) = &c.language {
-        print!("  Fetching boilerplate template... ");
-        let t = templates::resolve(lang, token, true)?;
-        println!("ok");
-        Some(t)
-    } else {
-        None
-    };
-    let secret_specs = c
-        .language
-        .as_deref()
-        .map(templates::load_secrets)
-        .unwrap_or_default();
-    let total = count_steps(c, &secret_specs);
-    let mut step = 0usize;
-
-    macro_rules! step {
-        ($msg:expr, $op:expr) => {{
-            step += 1;
-            if dry_run {
-                println!("  [{step}/{total}] [dry-run] {}", $msg);
-            } else {
-                print!("  [{step}/{total}] {}... ", $msg);
-                $op?;
-                println!("ok");
-            }
-        }};
-    }
-
-    // 1. Create repo (empty — initial commit via Trees API below)
-    let created_repo = if dry_run {
-        step += 1;
-        println!(
-            "  [{step}/{total}] [dry-run] create repo {}/{}",
-            c.owner, c.name
-        );
-        None
-    } else {
-        print!(
-            "  [{}/{total}] create repo {}/{}... ",
-            step + 1,
-            c.owner,
-            c.name
-        );
-        step += 1;
-        let r = repo::create_repo(
-            client,
-            &c.owner,
-            &c.name,
-            &c.description,
-            c.private,
-            c.is_org,
-        )?;
-        println!("ok  ({})", r.html_url);
-        Some(r)
-    };
-
-    let owner = &c.owner;
-    let name = &c.name;
-
-    // 2. Collect all boilerplate files for a single init commit
-    let mut init_files: Vec<contents::TreeFile> = vec![];
-
-    if let Some(tmpl) = &tmpl {
-        for f in tmpl.boilerplate_files(name, &c.description, owner) {
-            init_files.push(contents::TreeFile {
-                path: f.path,
-                content: f.content,
-            });
-        }
-
-        let gitignore = repo::get_gitignore_template(client, &tmpl.gitignore_name())
-            .unwrap_or_else(|_| {
-                eprintln!("  ⚠  Could not fetch .gitignore template from GitHub");
-                String::new()
-            });
-        init_files.push(contents::TreeFile {
-            path: ".gitignore".into(),
-            content: templates::assemble_gitignore(&gitignore),
-        });
-    }
-
-    // LICENSE — full text from GitHub's license API, with copyright placeholders
-    // filled in (owner + current year). MIT uses [year]/[fullname]; the Apache
-    // and GPL appendices use [yyyy]/[name of copyright owner].
-    if let Some(lic) = &c.license {
-        let year = current_year();
-        let license_text = repo::get_license_template(client, &lic.to_lowercase())?
-            .replace("[year]", &year)
-            .replace("[yyyy]", &year)
-            .replace("[fullname]", owner)
-            .replace("[name of copyright owner]", owner);
-        init_files.push(contents::TreeFile {
-            path: "LICENSE".into(),
-            content: license_text,
-        });
-    }
-
-    // 3. Single init commit with all files (skip if empty repo with no LICENSE)
-    let mut init_sha = String::new();
-    if !init_files.is_empty() {
-        step!("init repository", {
-            let sha = contents::create_tree_commit(
-                client,
-                owner,
-                name,
-                &init_files,
-                "chore: init repository",
-                &c.default_branch,
-            )?;
-            init_sha = sha;
-            Ok::<(), anyhow::Error>(())
-        });
-    }
-
-    // 4. develop branch
-    if c.create_develop {
-        if init_sha.is_empty() {
-            init_sha = branches::get_branch_sha(client, owner, name, &c.default_branch)?;
-        }
-        step!("create develop branch", {
-            branches::create_branch(client, owner, name, "develop", &init_sha)?;
-            Ok::<(), anyhow::Error>(())
-        });
-    }
-
-    // 5. Branch protection — required contexts are derived from the workflow
-    // files just committed, never hardcoded, so a renamed job can't leave a
-    // required check pointing at a name nothing will ever report.
-    let workflow_sources: Vec<crate::checks::WorkflowSource> = init_files
-        .iter()
-        .map(|f| crate::checks::WorkflowSource {
-            path: &f.path,
-            content: &f.content,
-        })
-        .collect();
-    let required_contexts = crate::checks::derive_required_contexts(&workflow_sources);
-    step!(
-        &format!("apply branch protection ({})", c.default_branch),
-        {
-            branches::apply_branch_protection(
-                client,
-                owner,
-                name,
-                &c.default_branch,
-                &required_contexts,
-            )?;
-            Ok::<(), anyhow::Error>(())
-        }
-    );
-    if c.create_develop {
-        step!("apply branch protection (develop)", {
-            branches::apply_branch_protection(client, owner, name, "develop", &required_contexts)?;
-            Ok::<(), anyhow::Error>(())
-        });
-    }
-
-    // 6. Labels
-    if c.create_labels {
-        step!("sync labels", {
-            let existing = labels::list_labels(client, owner, name)?;
-            let standard = labels::standard_labels();
-            for label in &standard {
-                if existing.iter().any(|e| e.name == label.name) {
-                    labels::update_label(client, owner, name, &label.name, label)?;
-                } else {
-                    labels::create_label(client, owner, name, label)?;
-                }
-            }
-            for existing_label in &existing {
-                if !standard.iter().any(|s| s.name == existing_label.name) {
-                    let _ = labels::delete_label(client, owner, name, &existing_label.name);
-                }
-            }
-            Ok::<(), anyhow::Error>(())
-        });
-    }
-
-    // 7. Topics
-    if !c.topics.is_empty() {
-        step!("set topics", {
-            repo::set_topics(client, owner, name, &c.topics)?;
-            Ok::<(), anyhow::Error>(())
-        });
-    }
-
-    // 8. Team access
-    for team in &c.team_access {
-        step!(
-            &format!(
-                "add team {} with {} access",
-                team.team_slug, team.permission
-            ),
-            {
-                teams::add_team_to_repo(client, owner, name, &team.team_slug, &team.permission)?;
-                Ok::<(), anyhow::Error>(())
-            }
-        );
-    }
-
-    // 9. Template secrets: env → vault → prompt
-    for spec in &secret_specs {
-        let value = if let Some(val) = crate::vault::resolve_secret(&spec.name, passphrase)? {
-            println!("  ◆ Secret {}: found", spec.name);
-            Some(val)
-        } else {
-            prompt_secret_value(spec, passphrase)?
-        };
-        if let Some(val) = value {
-            step!(&format!("configure secret {}", spec.name), {
-                secrets::set_secret(client, owner, name, &spec.name, &val)?;
-                Ok::<(), anyhow::Error>(())
-            });
-        } else {
-            step += 1; // keep total consistent even when skipped
-        }
-    }
-
-    println!();
-    if let Some(r) = &created_repo {
-        println!("  Done  —  {}", r.html_url);
-    } else {
-        println!("  Done  (dry-run)");
-    }
-    println!();
-
-    if !dry_run {
-        if let Some(_r) = &created_repo {
-            offer_gitkit_clone(owner, name);
-            offer_sponsor_button(client, owner, name);
-        }
-    }
-
-    Ok(())
 }
 
 /// Which way the user answered the Sponsor-button prompt, or that there was
@@ -1254,5 +1016,21 @@ mod tests {
     fn test_sponsor_outcome_message_error() {
         let result: Result<sponsors::SponsorshipStatus> = Err(anyhow::anyhow!("boom"));
         assert_eq!(sponsor_outcome_message(&result), "failed: boom");
+    }
+
+    #[test]
+    fn validate_repo_name_rejects_empty_accepts_name() {
+        use inquire::validator::Validation;
+
+        let empty: inquire::validator::ErrorMessage = "Repository name cannot be empty".into();
+        assert_eq!(
+            validate_repo_name("").unwrap(),
+            Validation::Invalid(empty.clone())
+        );
+        assert_eq!(
+            validate_repo_name("   ").unwrap(),
+            Validation::Invalid(empty)
+        );
+        assert_eq!(validate_repo_name("my-repo").unwrap(), Validation::Valid);
     }
 }

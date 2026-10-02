@@ -17,7 +17,13 @@ impl LanguageTemplate for RustTemplate {
         "Rust".into()
     }
 
-    fn boilerplate_files(&self, repo_name: &str, description: &str, _owner: &str) -> Vec<RepoFile> {
+    fn boilerplate_files(
+        &self,
+        repo_name: &str,
+        description: &str,
+        _owner: &str,
+        _license: Option<&str>,
+    ) -> Vec<RepoFile> {
         let cargo_toml = format!(
             "[package]\nname = \"{repo_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\ndescription = \"{description}\"\n\n[[bin]]\nname = \"{repo_name}\"\npath = \"src/main.rs\"\n\n[dependencies]\n"
         );
@@ -64,7 +70,7 @@ mod tests {
     #[test]
     fn test_rust_template_boilerplate_files() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg", None);
         assert_eq!(files.len(), 3, "Should generate 3 files");
 
         let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
@@ -76,7 +82,7 @@ mod tests {
     #[test]
     fn test_rust_template_cargo_toml_has_name_placeholder() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg", None);
         let cargo_toml = files.iter().find(|f| f.path == "Cargo.toml").unwrap();
         assert!(cargo_toml.content.contains("my-app"));
         assert!(cargo_toml.content.contains("A test app"));
@@ -85,7 +91,7 @@ mod tests {
     #[test]
     fn test_rust_template_main_rs_is_valid() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg", None);
         let main_rs = files.iter().find(|f| f.path == "src/main.rs").unwrap();
         assert!(main_rs.content.contains("fn main()"));
         assert!(main_rs.content.contains("println!"));
@@ -94,7 +100,7 @@ mod tests {
     #[test]
     fn test_rust_template_readme_has_name() {
         let tmpl = RustTemplate;
-        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg");
+        let files = tmpl.boilerplate_files("my-app", "A test app", "myorg", None);
         let readme = files.iter().find(|f| f.path == "README.md").unwrap();
         assert!(readme.content.contains("my-app"));
         assert!(readme.content.contains("A test app"));

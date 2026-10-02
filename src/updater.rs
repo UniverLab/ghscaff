@@ -1,63 +1,505 @@
-//! Self-update: replaces the binary that is currently running.
+//! Explicit self-update + read-only release notice (CM34): always asks,
+//! never installs on its own. Never touches `~/.ghscaff` state — the vault
+//! and the boilerplate cache are not the binary.
 //!
-//! Never writes to a hardcoded install directory. Resolves
-//! `std::env::current_exe()` and either replaces that file in place or,
-//! when it is managed by `cargo install`, leaves it untouched and tells
-//! the user to run `cargo install --force` instead.
+//! Only [`run_update`] — the explicit `ghscaff update` command — downloads
+//! and replaces the running binary, and only after consent (default **NO**,
+//! `--yes` skips the prompt). The startup notice in `main` is a silent,
+//! read-only lookup that prints one line and returns. Every external fact
+//! (release list, archive bytes, prompt answer, executable path, target) is
+//! injected through [`UpdateDeps`], so the unit tests below never touch the
+//! network.
+//!
+//! Exit codes of `ghscaff update [--check]`:
+//!
+//! | code | meaning |
+//! |---|---|
+//! | `0` | up to date / update installed / prompt declined / cargo refusal |
+//! | `1` | `--check` only: a newer stable release **is available** |
+//! | `2` | the release **check could not be completed** (network, DNS, TLS, HTTP ≥ 400, unparsable response); the cause is the single line printed on stderr. Applies to `--check` *and* plain `update`. |
+//!
+//! Failures *after* a successful check (download, checksum, permissions)
+//! remain ordinary `Err`s and therefore exit 1 with the normal error print.
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const GITHUB_REPO: &str = "UniverLab/ghscaff";
 
-enum Outcome {
-    Updated,
-    CargoManaged,
+/// The exact remediation printed when the running binary lives below
+/// `~/.cargo/bin`: cargo owns that file, so ghscaff refuses to replace it.
+pub const CARGO_INSTALL_HINT: &str = "cargo install --force ghscaff";
+
+/// `ghscaff update`: nothing installed (up to date, cargo-managed,
+/// declined) — and, for `--check`, nothing newer found.
+const EXIT_NO_UPDATE: i32 = 0;
+/// `ghscaff update --check`: a newer stable release is available.
+const EXIT_UPDATE_AVAILABLE: i32 = 1;
+/// `ghscaff update [--check]`: the release check could not be completed
+/// (network, DNS, TLS, HTTP ≥ 400, unparsable response). Cause on stderr.
+const EXIT_CHECK_FAILED: i32 = 2;
+
+// ── Release lookup seams ────────────────────────────────────────
+
+/// The release fields needed to select a stable, published binary.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct GitHubRelease {
+    pub tag_name: String,
+    #[serde(default)]
+    pub prerelease: bool,
+    #[serde(default)]
+    pub draft: bool,
 }
 
-/// Entry point, called after the user confirms the "Install now?" prompt.
-pub fn run_installer(latest_tag: &str) {
-    match install(latest_tag) {
-        Ok(Outcome::Updated) => {
-            println!("  \x1b[32m✓\x1b[0m Updated! Restart your terminal to use the new version.");
-            std::process::exit(0);
-        }
-        Ok(Outcome::CargoManaged) => {
-            println!("  ℹ  ghscaff was installed with cargo — the auto-updater won't touch it.");
-            println!("     Run this instead:");
-            println!();
-            println!("      cargo install --force ghscaff");
-            println!();
-        }
-        Err(e) => {
-            eprintln!("  ⚠ Update failed: {e:#}");
+/// Injectable release-JSON lookup used by the update core and the notice.
+pub trait ReleaseFetcher {
+    fn get(&self, url: &str) -> Result<String>;
+}
+
+/// Production release lookup. All network and HTTP-status handling lives
+/// behind [`ReleaseFetcher`] so unit tests can use a deterministic fake.
+///
+/// The notice path carries a short timeout (it runs before every
+/// subcommand); the explicit command uses [`RealFetcher::new`] with no
+/// timeout so a slow API never masquerades as a failure — errors there are
+/// loud anyway.
+pub struct RealFetcher {
+    timeout: Option<Duration>,
+}
+
+impl RealFetcher {
+    /// No request timeout: used by the explicit `ghscaff update` command.
+    pub fn new() -> Self {
+        Self { timeout: None }
+    }
+
+    /// Bounded request timeout: used by the silent startup notice.
+    pub fn with_timeout(timeout: Duration) -> Self {
+        Self {
+            timeout: Some(timeout),
         }
     }
 }
 
-fn install(latest_tag: &str) -> Result<Outcome> {
-    let current_exe =
-        std::env::current_exe().context("failed to resolve current executable path")?;
+impl Default for RealFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-    if is_cargo_managed(&current_exe) {
-        return Ok(Outcome::CargoManaged);
+impl ReleaseFetcher for RealFetcher {
+    fn get(&self, url: &str) -> Result<String> {
+        let client = match self.timeout {
+            Some(timeout) => reqwest::blocking::Client::builder()
+                .timeout(timeout)
+                .build()
+                .context("failed to build HTTP client")?,
+            None => reqwest::blocking::Client::new(),
+        };
+        let response = client
+            .get(url)
+            .header("User-Agent", "ghscaff-update")
+            .send()
+            .context("failed to fetch GitHub releases")?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("GitHub releases request failed: HTTP {status}");
+        }
+        response
+            .text()
+            .context("failed to read GitHub releases response")
+    }
+}
+
+/// Injectable binary downloader. The archive (and `SHA256SUMS.txt`) are
+/// decoded only after this seam returns, keeping the updater tests offline.
+pub trait BinaryDownloader {
+    fn download(&self, url: &str) -> Result<Vec<u8>>;
+}
+
+/// Production binary downloader. Deliberately timeout-free: a release
+/// archive is a multi-MiB download and a slow link is not a dead link.
+pub struct RealDownloader;
+
+impl BinaryDownloader for RealDownloader {
+    fn download(&self, url: &str) -> Result<Vec<u8>> {
+        let response = reqwest::blocking::Client::new()
+            .get(url)
+            .header("User-Agent", "ghscaff-update")
+            .send()
+            .with_context(|| format!("failed to download {url}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("download failed: HTTP {status} for {url}");
+        }
+        Ok(response
+            .bytes()
+            .with_context(|| format!("failed to read {url}"))?
+            .to_vec())
+    }
+}
+
+// ── Hermetic dependencies ───────────────────────────────────────
+
+/// Dependencies for the hermetic update command path. The real command uses
+/// the same flow with production I/O; tests provide every fallible external
+/// fact here and never contact GitHub or write outside the temp dirs they
+/// own.
+pub struct UpdateDeps<'a> {
+    /// Current version tag, `v`-prefixed (e.g. `v0.6.0`).
+    pub current: &'a str,
+    /// Release-list lookup outcome: `Err(cause)` means the check could not
+    /// be completed — the core prints the one-line cause on stderr and
+    /// returns exit code `2` instead of surfacing an `Err`.
+    pub releases: std::result::Result<Vec<GitHubRelease>, String>,
+    pub exe: &'a Path,
+    /// Cargo install root; `None` skips the cargo guard entirely.
+    pub cargo_bin: Option<&'a Path>,
+    pub target: std::result::Result<(&'static str, &'static str), String>,
+    pub downloader: &'a dyn BinaryDownloader,
+    pub confirm: &'a dyn Fn() -> bool,
+}
+
+// ── Display helpers ─────────────────────────────────────────────
+
+/// Strip a leading `v` for human-facing version strings (`v0.6.0` → `0.6.0`).
+/// Release and asset URLs keep the raw tag; this is *only* for output.
+pub fn display_version(version: &str) -> &str {
+    version.strip_prefix('v').unwrap_or(version)
+}
+
+/// The `ghscaff 0.0.1 → 0.6.0` update-available arrow.
+fn arrow_line(current: &str, latest: &str) -> String {
+    format!(
+        "ghscaff {} → {}",
+        display_version(current),
+        display_version(latest)
+    )
+}
+
+/// The `ghscaff 0.6.0 is up to date` line.
+fn up_to_date_line(current: &str) -> String {
+    format!("ghscaff {} is up to date", display_version(current))
+}
+
+/// The cargo-managed refusal: a full sentence, not a bare command.
+fn cargo_refusal_line() -> String {
+    format!("installed with cargo — run: {CARGO_INSTALL_HINT}")
+}
+
+/// The post-replace success line: no restart advice — the swap is in place
+/// and the next invocation already runs the new binary.
+fn success_line(latest: &str) -> String {
+    format!("✓ updated to {}", display_version(latest))
+}
+
+// ── Public update entry points ───────────────────────────────────
+
+/// Check for and, after consent, install the latest stable release.
+///
+/// The returned integer is the process exit code: `0` = up to date (or
+/// update installed / declined / cargo-managed refusal), `1` = an update is
+/// available in `--check` mode, `2` = the release check could not be
+/// completed (network, DNS, TLS, HTTP ≥ 400, unparsable response) — in that
+/// case the one-line cause goes to stderr. A check failure never becomes an
+/// `Err`; only install-phase failures (download, checksum, permissions) do,
+/// and those exit 1 through the normal error print.
+pub fn run_update(
+    check: bool,
+    yes: bool,
+    fetcher: &dyn ReleaseFetcher,
+    downloader: &dyn BinaryDownloader,
+) -> Result<i32> {
+    let current = current_version();
+    // A check failure becomes data (one-line error chain), not an Err: the
+    // hermetic core turns it into exit 2 in both `--check` and plain mode.
+    let releases = fetch_releases_with(fetcher).map_err(|error| format!("{error:#}"));
+    let latest = releases
+        .as_ref()
+        .ok()
+        .and_then(|releases| select_latest_stable(releases, &current));
+
+    // The first pass is limited to the network result. The hermetic core
+    // below owns all output and consent, so `--check` cannot touch a local
+    // path or the target before it returns — and a failed check returns
+    // exit 2 here, before any of those facts are resolved.
+    if latest.is_none() || check {
+        let deps = UpdateDeps {
+            current: &current,
+            releases,
+            exe: Path::new("/tmp/ghscaff-update-test/ghscaff"),
+            cargo_bin: None,
+            target: Ok(("x86_64", "unknown-linux-musl")),
+            downloader,
+            confirm: &|| false,
+        };
+        return run_update_with(check, yes, &deps);
     }
 
-    let dir = current_exe
+    // An actual install needs the executable and target facts. Resolve them
+    // only after the read-only pass established that a newer release exists.
+    let releases = releases.expect("a newer release was found above");
+    let latest = latest.expect("newer release was established above");
+    let exe = std::env::current_exe().context("failed to locate ghscaff executable")?;
+    let cargo_bin = cargo_install_root();
+    // Resolved eagerly but *carried* as a result: the hermetic core decides
+    // when it surfaces, so the cargo guard still wins on a cargo-managed
+    // install and an unsupported target fails loudly before any download.
+    let target = detect_platform().map_err(|error| {
+        if cfg!(target_os = "windows") {
+            format!(
+                "ghscaff update does not support windows — run scripts/install.ps1 instead \
+                 (release asset: ghscaff-{latest}-x86_64-pc-windows-msvc.zip)"
+            )
+        } else {
+            error.to_string()
+        }
+    });
+    let deps = UpdateDeps {
+        current: &current,
+        releases: Ok(releases),
+        exe: &exe,
+        cargo_bin: cargo_bin.as_deref(),
+        target,
+        downloader,
+        confirm: &|| {
+            inquire::Confirm::new(&format!("Update to {}? [y/N]", display_version(&latest)))
+                .with_default(false)
+                .prompt()
+                .unwrap_or(false)
+        },
+    };
+    run_update_with(false, yes, &deps)
+}
+
+/// Hermetic update flow used by unit tests and embedders. It has no
+/// network or filesystem setup step; callers provide those facts through
+/// [`UpdateDeps`]. Exit codes follow the contract of [`run_update`]: `Ok(2)`
+/// with one stderr line when `deps.releases` is an `Err` (the check could
+/// not be completed), `Ok(1)` for an available update under `--check`,
+/// `Ok(0)` otherwise; local failures surface as `Err`.
+pub fn run_update_with(check: bool, yes: bool, deps: &UpdateDeps<'_>) -> Result<i32> {
+    let releases = match &deps.releases {
+        Ok(releases) => releases,
+        Err(error) => {
+            eprintln!("update check failed: {error}");
+            return Ok(EXIT_CHECK_FAILED);
+        }
+    };
+    let Some(latest) = select_latest_stable(releases, deps.current) else {
+        println!("{}", up_to_date_line(deps.current));
+        return Ok(EXIT_NO_UPDATE);
+    };
+    println!("{}", arrow_line(deps.current, &latest));
+
+    // `--check` ends here: exit 1 = update available, 0 = already current.
+    // Nothing below this line — cargo guard, target, prompt, download — may
+    // run in read-only mode.
+    if check {
+        return Ok(EXIT_UPDATE_AVAILABLE);
+    }
+
+    // Cargo owns `~/.cargo/bin`; refuse before anything is downloaded.
+    if deps
+        .cargo_bin
+        .is_some_and(|root| is_cargo_managed_with_root(deps.exe, Some(root.to_path_buf())))
+    {
+        println!("{}", cargo_refusal_line());
+        return Ok(EXIT_NO_UPDATE);
+    }
+
+    let (arch, os) = *deps
+        .target
+        .as_ref()
+        .map_err(|error| anyhow!("target resolution failed: {error}"))?;
+
+    if !yes && !(deps.confirm)() {
+        println!("Aborted.");
+        return Ok(EXIT_NO_UPDATE);
+    }
+
+    let exe = deps.exe;
+    let dir = exe
         .parent()
         .context("executable path has no parent directory")?;
-    let file_name = current_exe
+    let file_name = exe
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("ghscaff");
     let tmp_path = dir.join(format!(".{file_name}.update"));
 
-    let (arch, os) = detect_platform()?;
-    update_binary_at(&tmp_path, &current_exe, |out| {
-        download_and_extract(latest_tag, arch, os, out)
+    update_binary_at(&tmp_path, exe, |out| {
+        download_verify_extract_with(deps.downloader, &latest, (arch, os), out)
     })?;
 
-    Ok(Outcome::Updated)
+    println!("{}", success_line(&latest));
+    Ok(EXIT_NO_UPDATE)
+}
+
+// ── Version helpers ─────────────────────────────────────────────
+
+/// The `v`-prefixed tag of the running binary, e.g. `v0.6.0`.
+pub fn current_version() -> String {
+    format!("v{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// A tag is "stable" when it carries nothing but digits and dots after an
+/// optional `v` — anything prerelease-shaped (`v1.0.0-rc1`) is skipped.
+pub fn is_stable_version(tag: &str) -> bool {
+    let value = tag.trim_start_matches('v');
+    !value.is_empty() && value.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+/// Numeric, `v`-insensitive component-wise comparison; a missing component
+/// counts as `0`, so `1.0` equals `1.0.0`.
+pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> Vec<u32> {
+        s.trim_start_matches('v')
+            .split('.')
+            .filter_map(|part| part.parse().ok())
+            .collect()
+    };
+    let (pa, pb) = (parse(a), parse(b));
+    let len = pa.len().max(pb.len());
+    for index in 0..len {
+        let comparison = pa
+            .get(index)
+            .copied()
+            .unwrap_or(0)
+            .cmp(&pb.get(index).copied().unwrap_or(0));
+        if comparison != std::cmp::Ordering::Equal {
+            return comparison;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// Select the newest published stable release strictly newer than `current`.
+/// Drafts, prereleases, and non-semver tags never win — and neither notice
+/// nor command can ever disagree, because both call this.
+pub fn select_latest_stable(releases: &[GitHubRelease], current: &str) -> Option<String> {
+    releases
+        .iter()
+        .filter(|release| !release.draft && !release.prerelease)
+        .filter(|release| is_stable_version(&release.tag_name))
+        .filter(|release| compare_versions(&release.tag_name, current).is_gt())
+        .max_by(|a, b| compare_versions(&a.tag_name, &b.tag_name))
+        .map(|release| release.tag_name.clone())
+}
+
+// ── Release and asset URLs ──────────────────────────────────────
+
+/// Full release list (not `/releases/latest`) so drafts, prereleases, and
+/// non-semver tags can be filtered in code; `per_page=100` keeps the default
+/// page-30 cut-off from hiding a stable tag.
+fn releases_url() -> String {
+    format!("https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=100")
+}
+
+/// The exact release asset name, matching `.github/workflows/release.yml`
+/// (delegating to `rust-release.yml`) and `scripts/install.sh`:
+/// `ghscaff-{tag}-{arch}-{os}.tar.gz`, tag keeping its leading `v`.
+pub fn asset_name(tag: &str, arch: &str, os: &str) -> String {
+    format!("ghscaff-{tag}-{arch}-{os}.tar.gz")
+}
+
+fn asset_url(tag: &str, (arch, os): (&str, &str)) -> String {
+    format!(
+        "https://github.com/{GITHUB_REPO}/releases/download/{tag}/{}",
+        asset_name(tag, arch, os)
+    )
+}
+
+/// `SHA256SUMS.txt` uploaded next to every release asset.
+pub fn sums_url(tag: &str) -> String {
+    format!("https://github.com/{GITHUB_REPO}/releases/download/{tag}/SHA256SUMS.txt")
+}
+
+/// Fetch the release list through an injected fetcher.
+pub fn fetch_releases_with(fetcher: &dyn ReleaseFetcher) -> Result<Vec<GitHubRelease>> {
+    let body = fetcher.get(&releases_url())?;
+    serde_json::from_str(&body).context("failed to parse releases JSON")
+}
+
+/// Fetch and select the newest stable release strictly newer than `current`.
+pub fn fetch_latest_stable_with(
+    fetcher: &dyn ReleaseFetcher,
+    current: &str,
+) -> Result<Option<String>> {
+    let releases = fetch_releases_with(fetcher)?;
+    Ok(select_latest_stable(&releases, current))
+}
+
+/// Silent startup notice: any network or parse failure is a `None`, never an
+/// error. The explicit command is the only loud path.
+pub fn check_notice(fetcher: &dyn ReleaseFetcher, current: &str) -> Option<String> {
+    fetch_latest_stable_with(fetcher, current).ok().flatten()
+}
+
+// ── Download, verification, extraction ──────────────────────────
+
+/// Outcome of the `SHA256SUMS.txt` check.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Check {
+    /// The release shipped a checksum line for this asset and it matched.
+    Verified,
+    /// The release ships no `SHA256SUMS.txt` — verification skipped.
+    Skipped,
+}
+
+/// Verify the downloaded archive against the release's `SHA256SUMS.txt`.
+///
+/// The rule mirrors `scripts/install.sh`: a missing sums file (fetch fails)
+/// skips verification, a sums file present but with **no line for this
+/// asset** aborts, and a mismatched digest aborts. The archive bytes are
+/// hashed whole — this runs before anything is written next to the exe.
+pub fn verify_checksum(
+    downloader: &dyn BinaryDownloader,
+    tag: &str,
+    asset: &str,
+    bytes: &[u8],
+) -> Result<Check> {
+    let Ok(sums) = downloader.download(&sums_url(tag)) else {
+        return Ok(Check::Skipped);
+    };
+
+    let text = String::from_utf8_lossy(&sums);
+    let line = text
+        .lines()
+        .find(|line| line.split_whitespace().nth(1) == Some(asset))
+        .filter(|line| !line.split_whitespace().next().unwrap_or("").is_empty())
+        .with_context(|| format!("no checksum listed for {asset}"))?;
+
+    let expected = line.split_whitespace().next().unwrap_or("");
+
+    use sha2::{Digest, Sha256};
+    let actual: String = Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if !actual.eq_ignore_ascii_case(expected) {
+        bail!("SHA256 mismatch for {asset}: expected {expected}, got {actual}");
+    }
+    Ok(Check::Verified)
+}
+
+/// Download the release asset for `tag`/`target`, verify it when the release
+/// ships checksums, and unpack the `ghscaff` entry into `output` — which is
+/// the same-directory staging file, never the running binary itself.
+pub fn download_verify_extract_with(
+    downloader: &dyn BinaryDownloader,
+    tag: &str,
+    target: (&str, &str),
+    output: &Path,
+) -> Result<()> {
+    let asset = asset_name(tag, target.0, target.1);
+    let bytes = downloader.download(&asset_url(tag, target))?;
+    if let Check::Skipped = verify_checksum(downloader, tag, &asset, &bytes)? {
+        println!("  ℹ checksum skipped (release ships no SHA256SUMS.txt)");
+    }
+    extract_binary(std::io::Cursor::new(bytes), output)
 }
 
 // ── Cargo-managed detection ─────────────────────────────────────
@@ -84,6 +526,8 @@ fn cargo_install_root() -> Option<PathBuf> {
     )
 }
 
+/// Both paths are canonicalized; an uncanonicalizable path (missing exe, an
+/// unresolvable root) is *not* cargo-managed rather than guessed.
 fn is_cargo_managed_with_root(exe_path: &Path, root: Option<PathBuf>) -> bool {
     let Some(root) = root else {
         return false;
@@ -95,6 +539,7 @@ fn is_cargo_managed_with_root(exe_path: &Path, root: Option<PathBuf>) -> bool {
     }
 }
 
+#[cfg(test)]
 fn is_cargo_managed(exe_path: &Path) -> bool {
     is_cargo_managed_with_root(exe_path, cargo_install_root())
 }
@@ -134,6 +579,8 @@ fn update_binary_at(
     result
 }
 
+/// Atomic same-directory swap: the staging file is a sibling of the target
+/// (`.{name}.update`), so the rename never crosses a filesystem.
 fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
     std::fs::rename(tmp_path, target).map_err(|e| {
         if e.kind() == std::io::ErrorKind::PermissionDenied {
@@ -145,23 +592,6 @@ fn replace_binary(tmp_path: &Path, target: &Path) -> Result<()> {
             anyhow::Error::new(e).context(format!("failed to replace {}", target.display()))
         }
     })
-}
-
-fn download_and_extract(tag: &str, arch: &str, os: &str, output: &Path) -> Result<()> {
-    let archive_name = format!("ghscaff-{tag}-{arch}-{os}.tar.gz");
-    let url = format!("https://github.com/{GITHUB_REPO}/releases/download/{tag}/{archive_name}");
-
-    let resp = reqwest::blocking::Client::new()
-        .get(&url)
-        .header("User-Agent", "ghscaff-autoupdate")
-        .send()
-        .with_context(|| format!("failed to download {url}"))?;
-
-    if !resp.status().is_success() {
-        anyhow::bail!("download failed: HTTP {} for {url}", resp.status());
-    }
-
-    extract_binary(resp, output)
 }
 
 fn extract_binary(reader: impl std::io::Read, output: &Path) -> Result<()> {
@@ -200,6 +630,9 @@ fn extract_binary(reader: impl std::io::Read, output: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `(arch, os)` pair for the running binary, matching the release matrix
+/// (`rust-release.yml`). Windows ships as a `.zip`, which this updater does
+/// not handle: refuse loudly before anything is downloaded.
 fn detect_platform() -> Result<(&'static str, &'static str)> {
     let arch = match std::env::consts::ARCH {
         "x86_64" => "x86_64",
@@ -215,258 +648,4 @@ fn detect_platform() -> Result<(&'static str, &'static str)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    fn make_tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut tar_bytes = Vec::new();
-        {
-            let mut builder = tar::Builder::new(&mut tar_bytes);
-            for (name, content) in entries {
-                let mut header = tar::Header::new_gnu();
-                header.set_size(content.len() as u64);
-                header.set_mode(0o755);
-                header.set_cksum();
-                builder.append_data(&mut header, name, *content).unwrap();
-            }
-            builder.finish().unwrap();
-        }
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        gz.write_all(&tar_bytes).unwrap();
-        gz.finish().unwrap()
-    }
-
-    #[test]
-    fn extract_binary_finds_named_entry() {
-        let archive = make_tar_gz(&[("ghscaff", b"fake-binary-contents")]);
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join("out");
-        extract_binary(std::io::Cursor::new(archive), &output).unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), b"fake-binary-contents");
-    }
-
-    #[test]
-    fn extract_binary_rejects_missing_entry() {
-        let archive = make_tar_gz(&[("other-file", b"contents")]);
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join("out");
-        let err = extract_binary(std::io::Cursor::new(archive), &output).unwrap_err();
-        assert!(err.to_string().contains("not found"));
-        assert!(!output.exists());
-    }
-
-    #[test]
-    fn extract_binary_rejects_empty_binary() {
-        let archive = make_tar_gz(&[("ghscaff", b"")]);
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join("out");
-        let err = extract_binary(std::io::Cursor::new(archive), &output).unwrap_err();
-        assert!(err.to_string().contains("empty"));
-        assert!(!output.exists());
-    }
-
-    #[test]
-    fn extract_binary_rejects_corrupt_archive() {
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join("out");
-        let result = extract_binary(std::io::Cursor::new(b"not a gzip stream".to_vec()), &output);
-        assert!(result.is_err());
-        assert!(!output.exists());
-    }
-
-    #[test]
-    fn update_binary_at_replaces_target_and_sets_executable() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("ghscaff");
-        std::fs::write(&target, b"old-binary").unwrap();
-        let tmp_path = dir.path().join(".ghscaff.update");
-
-        update_binary_at(&tmp_path, &target, |out| {
-            std::fs::write(out, b"new-binary")?;
-            Ok(())
-        })
-        .unwrap();
-
-        assert_eq!(std::fs::read(&target).unwrap(), b"new-binary");
-        assert!(!tmp_path.exists());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&target).unwrap().permissions().mode();
-            assert_eq!(mode & 0o111, 0o111);
-        }
-    }
-
-    #[test]
-    fn update_binary_at_leaves_target_untouched_when_fetch_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("ghscaff");
-        std::fs::write(&target, b"original-binary").unwrap();
-        let tmp_path = dir.path().join(".ghscaff.update");
-
-        let result = update_binary_at(&tmp_path, &target, |_out| {
-            anyhow::bail!("simulated download failure")
-        });
-
-        assert!(result.is_err());
-        assert_eq!(std::fs::read(&target).unwrap(), b"original-binary");
-        assert!(!tmp_path.exists());
-    }
-
-    #[test]
-    fn update_binary_at_cleans_up_tmp_file_when_extraction_writes_then_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("ghscaff");
-        std::fs::write(&target, b"original-binary").unwrap();
-        let tmp_path = dir.path().join(".ghscaff.update");
-
-        let result = update_binary_at(&tmp_path, &target, |out| {
-            std::fs::write(out, b"partial-garbage")?;
-            anyhow::bail!("corrupt archive")
-        });
-
-        assert!(result.is_err());
-        assert!(!tmp_path.exists());
-        assert_eq!(std::fs::read(&target).unwrap(), b"original-binary");
-    }
-
-    #[test]
-    fn resolve_cargo_root_prefers_install_root() {
-        let root = resolve_cargo_root(
-            Some("/opt/install-root".to_string()),
-            Some("/opt/cargo-home".to_string()),
-            Some(PathBuf::from("/home/user")),
-        );
-        assert_eq!(root, Some(PathBuf::from("/opt/install-root")));
-    }
-
-    #[test]
-    fn resolve_cargo_root_falls_back_to_cargo_home() {
-        let root = resolve_cargo_root(
-            None,
-            Some("/opt/cargo-home".to_string()),
-            Some(PathBuf::from("/home/user")),
-        );
-        assert_eq!(root, Some(PathBuf::from("/opt/cargo-home")));
-    }
-
-    #[test]
-    fn resolve_cargo_root_falls_back_to_home_dot_cargo() {
-        let root = resolve_cargo_root(None, None, Some(PathBuf::from("/home/user")));
-        assert_eq!(root, Some(PathBuf::from("/home/user/.cargo")));
-    }
-
-    #[test]
-    fn resolve_cargo_root_ignores_empty_env_values() {
-        let root = resolve_cargo_root(
-            Some(String::new()),
-            Some(String::new()),
-            Some(PathBuf::from("/home/user")),
-        );
-        assert_eq!(root, Some(PathBuf::from("/home/user/.cargo")));
-    }
-
-    #[test]
-    fn is_cargo_managed_detects_path_inside_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let cargo_root = dir.path().join("cargo");
-        let bin_dir = cargo_root.join("bin");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        let exe = bin_dir.join("ghscaff");
-        std::fs::write(&exe, b"binary").unwrap();
-
-        assert!(is_cargo_managed_with_root(&exe, Some(cargo_root)));
-    }
-
-    #[test]
-    fn is_cargo_managed_rejects_path_outside_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let cargo_root = dir.path().join("cargo");
-        std::fs::create_dir_all(cargo_root.join("bin")).unwrap();
-        let other_dir = dir.path().join("elsewhere");
-        std::fs::create_dir_all(&other_dir).unwrap();
-        let exe = other_dir.join("ghscaff");
-        std::fs::write(&exe, b"binary").unwrap();
-
-        assert!(!is_cargo_managed_with_root(&exe, Some(cargo_root)));
-    }
-
-    #[test]
-    fn is_cargo_managed_treats_uncanonicalizable_path_as_not_cargo() {
-        let dir = tempfile::tempdir().unwrap();
-        let cargo_root = dir.path().join("cargo");
-        std::fs::create_dir_all(cargo_root.join("bin")).unwrap();
-        let missing_exe = dir.path().join("does-not-exist");
-
-        assert!(!is_cargo_managed_with_root(&missing_exe, Some(cargo_root)));
-    }
-
-    #[test]
-    fn is_cargo_managed_with_no_resolvable_root_is_false() {
-        let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("ghscaff");
-        std::fs::write(&exe, b"binary").unwrap();
-
-        assert!(!is_cargo_managed_with_root(&exe, None));
-    }
-
-    #[test]
-    fn detect_platform_returns_supported_tuple_on_this_host() {
-        let result = detect_platform();
-        if (cfg!(target_os = "linux") || cfg!(target_os = "macos"))
-            && (cfg!(target_arch = "x86_64") || cfg!(target_arch = "aarch64"))
-        {
-            assert!(result.is_ok());
-        }
-    }
-
-    #[test]
-    fn cargo_install_root_returns_something() {
-        // cargo_install_root reads env vars; on any dev machine it should
-        // resolve to at least Some(...) via CARGO_HOME or ~/.cargo.
-        let root = cargo_install_root();
-        assert!(root.is_some());
-    }
-
-    #[test]
-    fn is_cargo_managed_delegates_correctly() {
-        let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("ghscaff");
-        std::fs::write(&exe, b"binary").unwrap();
-        // Without a real cargo root, this should be false
-        assert!(!is_cargo_managed(&exe));
-    }
-
-    #[test]
-    fn extract_binary_with_multiple_entries_finds_correct_one() {
-        let archive = make_tar_gz(&[
-            ("README.md", b"not the binary"),
-            ("ghscaff", b"real-binary-data"),
-            ("LICENSE", b"MIT"),
-        ]);
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join("out");
-        extract_binary(std::io::Cursor::new(archive), &output).unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), b"real-binary-data");
-    }
-
-    #[test]
-    fn update_binary_at_preserves_target_on_rename_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("ghscaff");
-        std::fs::write(&target, b"original").unwrap();
-        let tmp = dir.path().join(".update");
-
-        // Write to tmp, then try to rename to a non-existent directory
-        let bad_target = dir.path().join("nonexistent").join("ghscaff");
-        let result = update_binary_at(&tmp, &bad_target, |out| {
-            std::fs::write(out, b"new-content")?;
-            Ok(())
-        });
-
-        assert!(result.is_err());
-        // Target unchanged (still original)
-        assert_eq!(std::fs::read(&target).unwrap(), b"original");
-    }
-}
+mod tests;

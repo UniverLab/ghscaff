@@ -43,7 +43,7 @@ Interactive CLI wizard for creating and configuring GitHub repositories. One bin
 - **🚀 Language templates** — Rust (v1), Python/Node.js/Java coming soon
 - **📝 Boilerplate files** — README, Cargo.toml, CI/CD workflows, LICENSE
 - **🔑 Template secrets** — Automatically configures required GitHub Actions secrets per template
-- **⬆️ Self-update** — Replaces the running binary on startup; skips binaries installed with `cargo install` (use `cargo install --force` instead)
+- **⬆️ Explicit updates** — `ghscaff update` replaces the running binary, but only after asking (default: no). Binaries installed with `cargo install` are never touched — use `cargo install --force ghscaff` instead.
 
 ---
 
@@ -98,11 +98,37 @@ Check the [Releases](https://github.com/UniverLab/ghscaff/releases) page for pre
 
 ### Updates
 
-Ghscaff checks for new releases when it starts. If a newer version is available, it prompts you to update. Choose "yes" to replace the running binary with the latest version.
+Updating is always explicit — ghscaff never installs anything on its own:
 
-If you installed ghscaff with `cargo install`, the auto-updater will refuse to touch the binary and instead direct you to run `cargo install --force ghscaff`.
+```bash
+ghscaff update            # asks "Update to 0.7.0? [y/N]" — default is NO
+ghscaff update --yes      # skip the prompt
+ghscaff update --check    # report only: exit 0 = up to date, 1 = update available, 2 = the check could not be completed
+ghscaff update --dry-run  # same as --check: report only, never downloads or installs
+```
 
-You can disable update checks with:
+On "yes", ghscaff downloads the release asset for your platform, verifies it
+against the release's `SHA256SUMS.txt` (verification is skipped only when the
+release ships no checksum file) and atomically replaces the running binary.
+On success it prints `✓ updated to <version>` — no restart needed, the running
+binary is replaced in place and the next invocation already runs the new one.
+Your `~/.ghscaff` state — encrypted vault and boilerplate cache — is never
+touched: it is not the binary.
+
+Exit codes: `ghscaff update` (with or without `--check`) exits **2** when the
+release check cannot be completed — no network, DNS or TLS failure, HTTP ≥ 400,
+or an unparsable release-list response — and prints the cause on stderr; other
+failures (download, checksum, permissions) are ordinary errors (exit 1).
+`--check` exits 1 when an update is available, 0 when the binary is current.
+`--dry-run` behaves like `--check`: it reports and never downloads or installs.
+
+If you installed ghscaff with `cargo install`, `ghscaff update` refuses to
+touch the binary and instead prints:
+`installed with cargo — run: cargo install --force ghscaff`
+
+On startup ghscaff only *notices* new releases and prints a one-line hint to
+run `ghscaff update` — it never prompts and never installs. To silence the
+notice:
 ```bash
 GHSCAFF_NO_UPDATE_CHECK=1 ghscaff
 ```
@@ -258,10 +284,15 @@ Each language template includes:
 - **README.md** — Template with placeholders for name and description
 - **.gitignore** — Language-specific (fetched from GitHub API)
 - **.github/workflows/ci.yml** — CI/CD workflow with basic checks
-- **.github/workflows/release.yml** — Release workflow (published on Git tags)
+- **.github/workflows/release.yml** — Release workflow (published on Git tags; omitted when no license is chosen)
 - **LICENSE** — Placeholder (user selects license type during wizard)
 
 All files are merged into a single atomic `chore: init repository` commit.
+
+Choosing **None** for the license scaffolds an unpublishable project: a Rust
+crate gets `publish = false` instead of `license-file` in `Cargo.toml`, the CI
+workflow runs with `publish-check: false`, `release.yml` is not created, and a
+Python project gets no `license = …` line in `pyproject.toml`.
 
 ---
 
