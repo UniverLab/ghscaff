@@ -391,18 +391,28 @@ fn join_lines(lines: Vec<String>, trailing_newline: bool) -> String {
 }
 
 /// Remove a markdown section: the line equal to `heading` (after trimming
-/// trailing whitespace), every line up to (not including) the next line
-/// starting with `## ` or the end of file, and the single blank line directly
-/// above the heading if there is one. Returns `text` unchanged when the
+/// trailing whitespace), the body up to its last non-blank line — or to the
+/// end of file when no `## ` heading follows — and the single blank line
+/// directly above the heading if there is one. Blank lines separating the body
+/// from the next `## ` heading are kept. Returns `text` unchanged when the
 /// heading is absent.
 fn remove_markdown_section(text: &str, heading: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let Some(start) = lines.iter().position(|l| l.trim_end() == heading) else {
         return text.to_string();
     };
-    let end = (start + 1..lines.len())
+    let next = (start + 1..lines.len())
         .find(|&i| lines[i].starts_with("## "))
         .unwrap_or(lines.len());
+    // Keep the blank lines that separate the body from the next heading.
+    let end = if next < lines.len() {
+        (start + 1..next)
+            .rev()
+            .find(|&i| !lines[i].trim_end().is_empty())
+            .map_or(start + 1, |i| i + 1)
+    } else {
+        next
+    };
     let cut = usize::from(start > 0 && lines[start - 1].trim_end().is_empty());
     let mut kept: Vec<String> = lines[..start - cut]
         .iter()
@@ -2072,11 +2082,11 @@ jobs:
 
     #[test]
     fn remove_markdown_section_removes_middle_section() {
-        // The single blank line above the heading leaves with the section, so
-        // the next heading ends up glued to the preceding line (spec rule).
+        // The blank line above the heading leaves with the section; the
+        // blank line separating the body from the next heading stays.
         assert_eq!(
             remove_markdown_section("top\n\n## A\nbody\nmore\n\n## B\ntail\n", "## A"),
-            "top\n## B\ntail\n"
+            "top\n\n## B\ntail\n"
         );
     }
 
@@ -2157,10 +2167,11 @@ jobs:
             .contains("This project uses GitHub Actions for CI (`.github/workflows/ci.yml`)."));
         assert!(contributing.contains("## Code style"));
         assert!(contributing.contains("Fork, branch, PR."));
-        // The blank line above each removed heading went with the section, so
-        // what follows follows the preceding body line directly (spec rule).
+        // Every remaining heading stays separated from the line above it by
+        // exactly one blank line.
         assert!(contributing.contains("Fork, branch, PR.\n\n## CI/CD and required secrets"));
-        assert!(contributing.contains("ci.yml`).\n## Code style"));
+        assert!(contributing.contains("ci.yml`).\n\n## Code style"));
+        assert!(!contributing.contains("\n\n\n"));
     }
 
     #[test]
