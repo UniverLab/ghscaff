@@ -401,15 +401,16 @@ fn remove_markdown_section(text: &str, heading: &str) -> String {
     let Some(start) = lines.iter().position(|l| l.trim_end() == heading) else {
         return text.to_string();
     };
-    let next = (start + 1..lines.len())
+    let body = start + 1;
+    let next = (body..lines.len())
         .find(|&i| lines[i].starts_with("## "))
         .unwrap_or(lines.len());
     // Keep the blank lines that separate the body from the next heading.
     let end = if next < lines.len() {
-        (start + 1..next)
+        (body..next)
             .rev()
             .find(|&i| !lines[i].trim_end().is_empty())
-            .map_or(start + 1, |i| i + 1)
+            .map_or(body, |i| i + 1)
     } else {
         next
     };
@@ -2099,6 +2100,17 @@ jobs:
         assert_eq!(
             remove_markdown_section("keep\n\n## A\nbody", "## A"),
             "keep"
+        );
+    }
+
+    /// With no `## ` heading following, the section runs to the end of file:
+    /// blank lines after the last body line leave with it, they are not kept
+    /// as the new tail of the document.
+    #[test]
+    fn remove_markdown_section_end_of_file_section_drops_trailing_blank_lines() {
+        assert_eq!(
+            remove_markdown_section("keep\n\n## License\n\nlicensed text\n\n\n", "## License"),
+            "keep\n"
         );
     }
 
