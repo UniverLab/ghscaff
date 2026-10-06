@@ -1,0 +1,20 @@
+# Exclusions allowed by the mutants spec — real network adapters and the
+# process entry point. Every other mutant in the diff must be caught by
+# `cargo test`.
+
+exclude_re = [
+  # src/main.rs::main — process entry point; only wires the CLI and dispatches.
+  "src/main.rs:.*: replace main -> Result",
+  # src/main.rs::check_for_update — env-gated, silent, read-only startup notice.
+  "src/main.rs:.*: replace check_for_update with",
+  # updater::RealFetcher::with_timeout — builds the bounded-timeout real fetcher.
+  "RealFetcher::with_timeout",
+  # updater::<impl ReleaseFetcher for RealFetcher>::get — real HTTP release lookup.
+  "impl ReleaseFetcher for RealFetcher",
+  # updater::<impl BinaryDownloader for RealDownloader>::download — real HTTP download.
+  "impl BinaryDownloader for RealDownloader",
+  # src/templates/agent_registry.rs::<impl RegistryFetcher for HttpFetcher>::get — real HTTP registry fetch; #[cfg(not(test))], so no test binary ever contains it.
+  "impl RegistryFetcher for HttpFetcher",
+  # src/templates/agentic.rs::resolved_platforms — production network resolution (cache path + resolve(&HttpFetcher)); #[cfg(not(test))], so no test binary ever contains it.
+  "replace resolved_platforms -> Vec<Platform>",
+]
