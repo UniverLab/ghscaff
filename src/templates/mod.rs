@@ -536,6 +536,19 @@ pub struct SecretSpec {
     pub required: bool,
 }
 
+/// The template secrets that still need a value: those neither on the repo
+/// already nor provided to it by its organization. A repo-level copy of an
+/// organization secret would shadow the shared one, so ghscaff never writes it.
+pub fn secrets_to_configure<'a>(
+    specs: &'a [SecretSpec],
+    present: &[String],
+) -> Vec<&'a SecretSpec> {
+    specs
+        .iter()
+        .filter(|s| !present.iter().any(|p| p == &s.name))
+        .collect()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -567,6 +580,36 @@ pub fn load_secrets(language: &str) -> Vec<SecretSpec> {
 mod tests {
     use super::*;
     use crate::templates::rust::RustTemplate;
+
+    fn spec(name: &str) -> SecretSpec {
+        SecretSpec {
+            name: name.to_string(),
+            description: String::new(),
+            required: true,
+        }
+    }
+
+    #[test]
+    fn secrets_to_configure_skips_org_provided_and_existing() {
+        let specs = [
+            spec("CARGO_REGISTRY_TOKEN"),
+            spec("PYPI_API_TOKEN"),
+            spec("DEPLOY_KEY"),
+        ];
+        let present = ["CARGO_REGISTRY_TOKEN".to_string(), "DEPLOY_KEY".to_string()];
+        let names: Vec<_> = secrets_to_configure(&specs, &present)
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(names, ["PYPI_API_TOKEN"]);
+    }
+
+    #[test]
+    fn secrets_to_configure_asks_for_everything_without_an_org() {
+        let specs = [spec("CARGO_REGISTRY_TOKEN")];
+        assert_eq!(secrets_to_configure(&specs, &[]).len(), 1);
+    }
+
     #[test]
     fn test_available_languages() {
         assert!(!AVAILABLE.is_empty(), "Should have at least one language");
