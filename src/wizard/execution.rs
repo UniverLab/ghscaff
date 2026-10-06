@@ -333,7 +333,8 @@ fn grant_wizard_team_access_step(
     Ok(())
 }
 
-/// Step 9 — template secrets: env → vault → prompt.
+/// Step 9 — template secrets: organization → vault → prompt. A secret the
+/// organization already provides is never copied onto the repo.
 fn configure_wizard_secrets_step(
     progress: &mut StepCounter,
     client: &GithubClient,
@@ -341,7 +342,14 @@ fn configure_wizard_secrets_step(
     passphrase: &str,
     secret_specs: &[templates::SecretSpec],
 ) -> Result<()> {
+    let org_secrets = secrets::list_org_secret_names(client, &c.owner, &c.name);
+    let to_configure = templates::secrets_to_configure(secret_specs, &org_secrets);
     for spec in secret_specs {
+        if !to_configure.iter().any(|s| s.name == spec.name) {
+            println!("  ◆ Secret {}: provided by the organization", spec.name);
+            progress.skip();
+            continue;
+        }
         let value = if let Some(val) = crate::vault::resolve_secret(&spec.name, passphrase)? {
             println!("  ◆ Secret {}: found", spec.name);
             Some(val)

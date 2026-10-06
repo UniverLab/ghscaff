@@ -515,19 +515,22 @@ fn apply_team_access_step(
 }
 
 /// Step 6 — secrets from the template (detected from the repo's marker
-/// files), skipping the ones the repo already has.
+/// files), skipping the ones the repo already has or its organization
+/// provides.
 fn apply_missing_secrets_step(target: &ApplyTarget) -> Result<()> {
     let secret_specs = detect_template_secrets(&target.client, &target.owner, &target.repo_name);
     if secret_specs.is_empty() {
         return Ok(());
     }
 
-    let existing = secrets::list_secret_names(&target.client, &target.owner, &target.repo_name)
+    let mut present = secrets::list_secret_names(&target.client, &target.owner, &target.repo_name)
         .unwrap_or_default();
-    let missing: Vec<_> = secret_specs
-        .iter()
-        .filter(|s| !existing.iter().any(|e| e == &s.name))
-        .collect();
+    present.extend(secrets::list_org_secret_names(
+        &target.client,
+        &target.owner,
+        &target.repo_name,
+    ));
+    let missing = crate::templates::secrets_to_configure(&secret_specs, &present);
     if missing.is_empty() {
         return Ok(());
     }
