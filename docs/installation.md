@@ -55,14 +55,35 @@ x86_64 are published on the
 
 ## Self-update
 
-Ghscaff checks for new releases on startup. When a newer version is available, it prompts you to update. Choose "yes" to replace the running binary with the latest version.
+Updating is always explicit — ghscaff never installs anything on its own:
 
-If you installed ghscaff with `cargo install`, the auto-updater will refuse to touch the binary and instead direct you to run:
 ```bash
-cargo install --force ghscaff
+ghscaff update            # asks "Update to 0.7.0? [y/N]" — default is NO
+ghscaff update --yes      # skip the prompt
+ghscaff update --check    # report only: exit 0 = up to date, 1 = update available, 2 = the check could not be completed
+ghscaff update --dry-run  # same as --check: report only, never downloads or installs
 ```
 
-You can disable update checks by setting the environment variable:
+On "yes", ghscaff downloads the release asset for your platform, verifies it
+against the release's `SHA256SUMS.txt` (skipped only when the release ships
+no checksum file) and atomically replaces the running binary. On success it
+prints `✓ updated to <version>` — no restart needed, the running binary is
+replaced in place and the next invocation already runs the new one. Your
+`~/.ghscaff` state — encrypted vault and boilerplate cache — is never touched.
+
+Exit codes: `ghscaff update` (with or without `--check`) exits **2** when the
+release check cannot be completed — no network, DNS or TLS failure, HTTP ≥ 400,
+or an unparsable release-list response — and prints the cause on stderr; other
+failures (download, checksum, permissions) are ordinary errors (exit 1).
+`--check` exits 1 when an update is available, 0 when the binary is current.
+`--dry-run` behaves like `--check`: it reports and never downloads or installs.
+
+If you installed ghscaff with `cargo install`, `ghscaff update` refuses to
+touch the binary and instead prints:
+`installed with cargo — run: cargo install --force ghscaff`
+
+At startup ghscaff only prints a one-line notice when a newer release exists.
+Disable that notice with:
 ```bash
 GHSCAFF_NO_UPDATE_CHECK=1 ghscaff
 ```

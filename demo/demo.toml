@@ -1,6 +1,8 @@
 [demo]
 name = "demo"
 output_dir = "./dist"
+speed = "2x"
+targets = ["gif", "mp4"]
 prompt = '\[\e[1;32m\]ghScaff@univerlab\[\e[0m\]:\[\e[1;34m\]~\[\e[0m\]$ '
 
 [typing]
@@ -63,13 +65,11 @@ duration_ms = 200
 action = "keypress"
 key = "enter"
 
+# The vault has no passphrase, so ghscaff goes straight to the repository name.
 [[timeline]]
-action = "wait"
-duration_ms = 2500
-
-[[timeline]]
-action = "secret"
-prompt = "Vault passphrase:"
+action = "wait_for_screen"
+match = "Repository name:"
+timeout_ms = 30000
 
 [[timeline]]
 action = "type"
@@ -216,9 +216,27 @@ duration_ms = 200
 action = "keypress"
 key = "enter"
 
+# Applying is a run of silent API calls: wait for the prompts that follow it,
+# never for quiet, or the take cuts away (and ends) mid-scaffold.
+# The rust template asks for CARGO_REGISTRY_TOKEN; skip it with esc (ghscaff
+# then says to set it later with `ghscaff apply`).
 [[timeline]]
-action = "wait_for_quiet"
-quiet_ms = 500
+action = "wait_for_screen"
+match = "Secret CARGO_REGISTRY_TOKEN"
+timeout_ms = 180000
+
+[[timeline]]
+action = "wait"
+duration_ms = 1200
+
+[[timeline]]
+action = "keypress"
+key = "esc"
+
+[[timeline]]
+action = "wait_for_screen"
+match = "Clone the repository with gitkit?"
+timeout_ms = 60000
 
 [[timeline]]
 action = "type"
@@ -234,8 +252,26 @@ action = "keypress"
 key = "enter"
 
 [[timeline]]
-action = "wait_for_quiet"
-quiet_ms = 1500
+action = "wait_for_screen"
+match = "Sponsor button"
+timeout_ms = 30000
+
+[[timeline]]
+action = "type"
+text = "n"
+human_salt = true
+
+[[timeline]]
+action = "wait"
+duration_ms = 200
+
+[[timeline]]
+action = "keypress"
+key = "enter"
+
+[[timeline]]
+action = "wait"
+duration_ms = 1500
 
 [[timeline]]
 action = "focus"
