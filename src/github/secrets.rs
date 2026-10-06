@@ -68,6 +68,17 @@ pub fn list_secret_names(client: &GithubClient, owner: &str, repo: &str) -> Resu
     Ok(resp.secrets.into_iter().map(|s| s.name).collect())
 }
 
+/// Names of the organization secrets the repo can read. A repo owned by a
+/// user has no organization (the API answers 422); that, like any failure,
+/// reads as none, so the caller falls back to asking for the value.
+pub fn list_org_secret_names(client: &GithubClient, owner: &str, repo: &str) -> Vec<String> {
+    let path = format!("/repos/{owner}/{repo}/actions/organization-secrets?per_page=100");
+    client
+        .get::<SecretsListResponse>(&path)
+        .map(|resp| resp.secrets.into_iter().map(|s| s.name).collect())
+        .unwrap_or_default()
+}
+
 /// Encrypts `value` with the repo's public key and stores it as a secret.
 pub fn set_secret(
     client: &GithubClient,
@@ -121,6 +132,14 @@ mod tests {
         assert_eq!(resp.secrets.len(), 2);
         assert_eq!(resp.secrets[0].name, "SECRET1");
         assert_eq!(resp.secrets[1].name, "SECRET2");
+    }
+
+    #[test]
+    fn test_org_secrets_list_response_deserialize() {
+        let json = r#"{"total_count":1,"secrets":[{"name":"CARGO_REGISTRY_TOKEN","created_at":"2026-10-06T00:47:23Z","updated_at":"2026-10-06T00:47:23Z","visibility":"all"}]}"#;
+        let resp: SecretsListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.secrets.len(), 1);
+        assert_eq!(resp.secrets[0].name, "CARGO_REGISTRY_TOKEN");
     }
 
     #[test]
