@@ -39,7 +39,7 @@ pub fn derive_required_contexts(files: &[WorkflowSource]) -> Vec<String> {
         .iter()
         .filter(|f| is_workflow_path(f.path))
         .filter_map(|f| {
-            serde_yaml::from_str::<Workflow>(f.content)
+            serde_saphyr::from_str::<Workflow>(f.content)
                 .ok()
                 .map(|w| (f.path, w))
         })
@@ -78,7 +78,7 @@ pub fn derive_required_contexts(files: &[WorkflowSource]) -> Vec<String> {
 /// workflows. Used to fetch just those extra files when the caller only has
 /// one workflow's content in hand (e.g. reading a live repo).
 pub fn referenced_local_workflows(content: &str) -> Vec<String> {
-    let Ok(workflow) = serde_yaml::from_str::<Workflow>(content) else {
+    let Ok(workflow) = serde_saphyr::from_str::<Workflow>(content) else {
         return Vec::new();
     };
     workflow
