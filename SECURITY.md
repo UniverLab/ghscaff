@@ -13,7 +13,7 @@ If you discover a security vulnerability in ghscaff, please report it responsibl
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Instead, email: **jheison.mb@univerlab.org**
+Instead, email: **hola@univerlab.org**
 
 Include:
 - Description of the vulnerability
