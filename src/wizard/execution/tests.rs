@@ -359,6 +359,22 @@ fn apply_wizard_protections_step_puts_main_and_develop() {
 }
 
 #[test]
+fn apply_wizard_protections_step_skips_a_plan_refusal() {
+    let (url, log) = start_recording_mock_server(protections_handler(403));
+    let client = mock_client(&url);
+    let mut config = minimal_config();
+    config.create_develop = true;
+    let files = workflow_files();
+    let mut progress = StepCounter::new(4, false);
+    apply_wizard_protections_step(&mut progress, &client, &config, &files).unwrap();
+    assert!(has_call(
+        &log,
+        "PUT",
+        "/repos/owner/repo/branches/develop/protection"
+    ));
+}
+
+#[test]
 fn apply_wizard_protections_step_propagates_error() {
     let (url, log) = start_recording_mock_server(protections_handler(500));
     let client = mock_client(&url);
