@@ -235,32 +235,38 @@ fn apply_wizard_protections_step(
         .collect();
     let required_contexts = crate::checks::derive_required_contexts(&workflow_sources);
 
-    progress.run(
-        &format!("apply branch protection ({})", c.default_branch),
-        || {
-            branches::apply_branch_protection(
-                client,
-                &c.owner,
-                &c.name,
-                &c.default_branch,
-                &required_contexts,
-            )?;
-            Ok(())
-        },
-    )?;
+    protect_branch(progress, client, c, &c.default_branch, &required_contexts)?;
     if c.create_develop {
-        progress.run("apply branch protection (develop)", || {
-            branches::apply_branch_protection(
-                client,
-                &c.owner,
-                &c.name,
-                "develop",
-                &required_contexts,
-            )?;
-            Ok(())
-        })?;
+        protect_branch(progress, client, c, "develop", &required_contexts)?;
     }
     Ok(())
+}
+
+/// Protect one branch. A 403 means the account's plan has no branch protection
+/// for this repo (a private repo on a free plan): the wizard says so and goes on
+/// to labels, topics, teams and secrets instead of leaving the repo half set up.
+/// Any other error still stops the wizard.
+fn protect_branch(
+    progress: &mut StepCounter,
+    client: &GithubClient,
+    c: &WizardConfig,
+    branch: &str,
+    required_contexts: &[String],
+) -> Result<()> {
+    let result = progress.run(&format!("apply branch protection ({branch})"), || {
+        branches::apply_branch_protection(client, &c.owner, &c.name, branch, required_contexts)
+    });
+    match result {
+        Err(e) if format!("{e:#}").contains("403") => {
+            println!("skipped");
+            println!("    ⚠ GitHub refused branch protection (403): a private repo on a free plan has none.");
+            println!(
+                "      Protect {branch} by hand if the plan changes, or make the repo public."
+            );
+            Ok(())
+        }
+        other => other,
+    }
 }
 
 /// Step 6 — labels.
